@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.exe
+
+# Build directories
+/lib/
+/build/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db

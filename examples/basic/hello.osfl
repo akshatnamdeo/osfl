@@ -1,0 +1,4 @@
+func main() {
+    var message = "Hello, OSFL!";
+    print(message);
+}
