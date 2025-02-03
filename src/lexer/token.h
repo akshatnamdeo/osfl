@@ -26,35 +26,34 @@ typedef enum {
     TOKEN_RESET,      // reset
     TOKEN_NULL,       // null
 
-    /**
-     * Additional keywords referenced by the test code:
-     * - TOKEN_FUNCTION
-     * - TOKEN_TRY
-     * - TOKEN_CATCH
-     * If your language grammar actually uses "func" instead of "function",
-     * you can rename or remove these. For now, we add them for test compatibility.
-     */
+    // Additional keywords (for parser expansions)
     TOKEN_FUNCTION,   // "function"
     TOKEN_TRY,        // "try"
     TOKEN_CATCH,      // "catch"
+    TOKEN_WHILE,      // "while"
+    TOKEN_FOR,        // "for"
+    TOKEN_ELIF,       // "elif" (Python-style else-if)
+    TOKEN_SWITCH,     // "switch"
+    TOKEN_CLASS,      // "class"
+    TOKEN_IMPORT,     // "import"
 
     // Data types
-    TOKEN_TYPE_INT,    // int
-    TOKEN_TYPE_FLOAT,  // float
-    TOKEN_TYPE_BOOL,   // bool
-    TOKEN_TYPE_STRING, // string
-    TOKEN_TYPE_FRAME,  // frame
-    TOKEN_TYPE_REF,    // ref
+    TOKEN_TYPE_INT,
+    TOKEN_TYPE_FLOAT,
+    TOKEN_TYPE_BOOL,
+    TOKEN_TYPE_STRING,
+    TOKEN_TYPE_FRAME,
+    TOKEN_TYPE_REF,
 
     // Literals
-    TOKEN_INTEGER,     // 123
-    TOKEN_FLOAT,       // 123.456
-    TOKEN_STRING,      // "hello"
-    TOKEN_BOOL_TRUE,   // true
-    TOKEN_BOOL_FALSE,  // false
+    TOKEN_INTEGER,
+    TOKEN_FLOAT,
+    TOKEN_STRING,
+    TOKEN_BOOL_TRUE,
+    TOKEN_BOOL_FALSE,
 
     // Identifiers
-    TOKEN_IDENTIFIER,  // variable_name
+    TOKEN_IDENTIFIER,
 
     // Arithmetic operators
     TOKEN_PLUS,        // +
@@ -64,6 +63,13 @@ typedef enum {
     TOKEN_PERCENT,     // %
     TOKEN_INCREMENT,   // ++
     TOKEN_DECREMENT,   // --
+    TOKEN_POW,         // ** (exponent)
+
+    // Bitwise operators
+    TOKEN_BIT_NOT,     // ~
+    TOKEN_BIT_AND,     // &
+    TOKEN_BIT_OR,      // |
+    TOKEN_BIT_XOR,     // ^
 
     // Logical operators
     TOKEN_AND,         // &&
@@ -96,10 +102,18 @@ typedef enum {
     TOKEN_RPAREN,      // )
     TOKEN_LBRACE,      // {
     TOKEN_RBRACE,      // }
+    TOKEN_LBRACKET,    // [
+    TOKEN_RBRACKET,    // ]
     TOKEN_COMMA,       // ,
     TOKEN_DOT,         // .
     TOKEN_SEMICOLON,   // ;
     TOKEN_COLON,       // :
+
+    // New/Enhanced tokens for strings
+    TOKEN_DOCSTRING,             // """multi-line string"""
+    TOKEN_INTERPOLATION_START,   // "${"
+    TOKEN_INTERPOLATION_END,     // "}" end of interpolation
+    TOKEN_REGEX,                 // /.../ (regex literal)
 
     // Special tokens
     TOKEN_NEWLINE,     // Newline

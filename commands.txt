@@ -4,3 +4,8 @@ clang -std=c11 -Wall -Wextra -I include -I src/lexer -I src/parser -o test/test_
 ./test/test_parser
 clang -std=c11 -Wall -Wextra -I include -I src/vm -o test/test_vm test/test_vm.c src/vm/vm.c src/vm/frame.c src/vm/memory.c
 ./test/test_vm
+
+clang -D_CRT_SECURE_NO_WARNINGS -std=c11 -Wall -Wextra   -I include -I src/lexer -I src/parser -I src/ast -I src/symbol_table -I src\semantic -I src\runtime -I src\vm -I src\compiler -I src\osfl   -o osfl   src/main.c   src/lexer/lexer.c   src/parser/parser.c   src/ast/ast.c   src/symbol_table/symbol_table.c   src/semantic/semantic.c   src/compiler/bytecode.c   src/compiler/compiler.c   src/runtime/runtime.c   src/vm/vm.c   src/vm/frame.c   src/vm/memory.c   src/osfl/osfl.c
+./osfl examples/basic/hello.osfl
+
+find . -type f ! -path './.*/*'

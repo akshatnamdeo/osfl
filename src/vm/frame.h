@@ -5,54 +5,44 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/**
- * A flexible Value type to allow storing multiple data types in locals.
- * For simplicity, we use a union plus a type tag. Expand as needed
- * (e.g., to store strings, references, objects, etc.).
+/*
+ * A minimal FrameValueType for local variables in frames.
  */
 typedef enum {
-    VAL_INT,
-    VAL_FLOAT,
-    VAL_BOOL,
-    VAL_NONE
-    /* You can add VAL_STRING, VAL_OBJECT, etc. */
-} ValueType;
+    FRAME_VAL_INT,
+    FRAME_VAL_FLOAT,
+    FRAME_VAL_BOOL,
+    FRAME_VAL_NONE,
+    FRAME_VAL_OBJ,
+    FRAME_VAL_STRING
+} FrameValueType;
 
+/*
+ * A Value in local variables (in frames)
+ */
 typedef struct {
-    ValueType type;
+    FrameValueType type;
     union {
         int64_t int_val;
-        double float_val;
-        bool bool_val;
-        /* Add more as needed. e.g., pointer to string or object. */
+        double  float_val;
+        bool    bool_val;
+        void*   obj_ref;  /* If you want to store objects in frames */
     } as;
-} Value;
+} FrameValue;
 
-/**
- * The Frame structure represents a call frame in the VM.
- * - 'locals': array of Values
- * - 'local_count': number of local variables
- * - 'parent': parent frame for dynamic scoping or nested function contexts
+/*
+ * A Frame structure for function calls in the VM.
+ * Holds a local array of Values.
  */
 typedef struct Frame {
-    Value* locals;           /* Array of local variables (Value type) */
-    size_t local_count;      /* Number of local variables */
-    struct Frame* parent;    /* Parent frame for dynamic scoping or closures */
+    FrameValue* locals;
+    size_t local_count;
 
-    /* Optionally store additional data, like instruction pointer,
-       function metadata, closure references, etc. */
+    struct Frame* parent;  /* link to parent frame if needed */
 } Frame;
 
-/**
- * Create a new frame with a given number of local variables.
- * 'parent' is an optional parent frame. Return NULL on failure.
- */
+/* Create/destroy frames */
 Frame* frame_create(size_t local_count, Frame* parent);
+void  frame_destroy(Frame* frame);
 
-/**
- * Destroy a frame and free its memory.
- * Does NOT recurse into parent; you typically manage that in the VM’s call stack.
- */
-void frame_destroy(Frame* frame);
-
-#endif // FRAME_H
+#endif /* FRAME_H */

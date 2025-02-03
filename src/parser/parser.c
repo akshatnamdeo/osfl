@@ -3,112 +3,75 @@
 #include <stdio.h>
 #include <string.h>
 
-/*
-    Helper functions for token management.
-*/
+/* ------------------------------------------------------------------
+ * TOKEN HELPER DECLARATIONS
+ * ------------------------------------------------------------------ */
+static Token parser_peek(Parser* parser);
+static Token parser_advance(Parser* parser);
+static int   parser_match(Parser* parser, TokenType type);
+static void  parser_consume(Parser* parser, TokenType type, const char* error_message);
 
-/**
- * Peek at the current token without consuming it.
- */
-static Token parser_peek(Parser* parser) {
-    if (parser->current < parser->token_count) {
-        return parser->tokens[parser->current];
-    }
-    Token eof;
-    memset(&eof, 0, sizeof(Token));
-    eof.type = TOKEN_EOF;
-    return eof;
-}
-
-/**
- * Consume and return the current token.
- */
-static Token parser_advance(Parser* parser) {
-    if (parser->current < parser->token_count) {
-        return parser->tokens[parser->current++];
-    }
-    Token eof;
-    memset(&eof, 0, sizeof(Token));
-    eof.type = TOKEN_EOF;
-    return eof;
-}
-
-/**
- * If the current token matches the given type, consume it and return 1;
- * otherwise, return 0.
- */
-static int parser_match(Parser* parser, TokenType type) {
-    if (parser_peek(parser).type == type) {
-        parser_advance(parser);
-        return 1;
-    }
-    return 0;
-}
-
-/**
- * Create an AST node with the given type and value.
- * The source location is taken from the pointer passed in.
- */
-static AstNode* create_ast_node(AstNodeType type, const char* value, const SourceLocation* loc) {
-    AstNode* node = (AstNode*)malloc(sizeof(AstNode));
-    if (!node) return NULL;
-    node->type = type;
-    node->value = (value != NULL) ? strdup(value) : NULL;
-    if (loc != NULL) {
-        node->loc = *loc;  // Copy the source location structure.
-    } else {
-        memset(&node->loc, 0, sizeof(SourceLocation));
-    }
-    node->left = NULL;
-    node->right = NULL;
-    node->next = NULL;
-    return node;
-}
-
-/* Forward declarations for recursive-descent parsing functions. */
+/* ------------------------------------------------------------------
+ * FORWARD DECLARATIONS OF PARSE FUNCTIONS
+ * ------------------------------------------------------------------ */
+static AstNode* parse_program(Parser* parser);
+static AstNode* parse_declaration(Parser* parser);
 static AstNode* parse_statement(Parser* parser);
-static AstNode* parse_expression(Parser* parser);
+static AstNode* parse_block(Parser* parser);
+
 static AstNode* parse_frame(Parser* parser);
 static AstNode* parse_var_decl(Parser* parser);
 static AstNode* parse_func_decl(Parser* parser);
-static AstNode* parse_if_statement(Parser* parser);
-static AstNode* parse_loop_statement(Parser* parser);
-static AstNode* parse_error_handler(Parser* parser);
+static AstNode* parse_class_decl(Parser* parser);
+static AstNode* parse_import_decl(Parser* parser);
 
-/**
- * Parse a sequence of statements until TOKEN_EOF.
- */
-static AstNode* parse_program(Parser* parser) {
-    AstNode* head = NULL;
-    AstNode* current = NULL;
-    while (parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
-            // Error recovery: skip a token and continue.
-            parser_advance(parser);
-            continue;
-        }
-        if (!head) {
-            head = stmt;
-            current = stmt;
-        } else {
-            current->next = stmt;
-            current = stmt;
-        }
-    }
-    return head;
-}
+static AstNode* parse_if_stmt(Parser* parser);
+static AstNode* parse_while_stmt(Parser* parser);
+static AstNode* parse_for_stmt(Parser* parser);
+static AstNode* parse_switch_stmt(Parser* parser);
+static AstNode* parse_try_catch_stmt(Parser* parser);
+static AstNode* parse_on_error_stmt(Parser* parser);
 
-/**
- * Public API: Parse the token stream into an AST.
- */
-AstNode* parser_parse(Parser* parser) {
-    return parse_program(parser);
-}
+static AstNode* parse_expression_stmt(Parser* parser);
 
-/**
- * Create a new Parser instance.
+/* Expression grammar with precedence */
+static AstNode* parse_expression(Parser* parser);
+static AstNode* parse_assignment(Parser* parser);
+static AstNode* parse_logical_or(Parser* parser);
+static AstNode* parse_logical_and(Parser* parser);
+static AstNode* parse_bitwise_or(Parser* parser);
+static AstNode* parse_bitwise_xor(Parser* parser);
+static AstNode* parse_bitwise_and(Parser* parser);
+static AstNode* parse_equality(Parser* parser);
+static AstNode* parse_comparison(Parser* parser);
+static AstNode* parse_term(Parser* parser);
+static AstNode* parse_factor(Parser* parser);
+static AstNode* parse_power(Parser* parser);
+static AstNode* parse_unary(Parser* parser);
+static AstNode* parse_primary(Parser* parser);
+
+/* 
+ * Utility for building dynamic arrays of AstNode*
+ * used for block statements, function bodies, etc.
  */
+static void append_node(AstNode*** array_ptr, size_t* count_ptr, AstNode* node);
+
+/*
+ * Helper to create a block node with an array of statements
+ */
+static AstNode* make_block_node(const SourceLocation* loc, AstNode** stmts, size_t count);
+
+/*
+ * Constructors for expressions 
+ */
+static AstNode* make_expr_literal(const Token* tok);
+static AstNode* make_expr_identifier(const Token* tok);
+static AstNode* make_expr_binary(TokenType op, AstNode* left, AstNode* right, const SourceLocation* loc);
+static AstNode* make_expr_unary(TokenType op, AstNode* expr, const SourceLocation* loc);
+
+/* ------------------------------------------------------------------
+ * PARSER LIFECYCLE
+ * ------------------------------------------------------------------ */
 Parser* parser_create(Token* tokens, size_t token_count) {
     Parser* parser = (Parser*)malloc(sizeof(Parser));
     if (!parser) return NULL;
@@ -118,308 +81,767 @@ Parser* parser_create(Token* tokens, size_t token_count) {
     return parser;
 }
 
-/**
- * Destroy the Parser instance.
- */
 void parser_destroy(Parser* parser) {
     if (parser) {
         free(parser);
     }
 }
 
-/**
- * Parse a single statement.
- * Delegates to specialized functions based on the current token.
- */
-static AstNode* parse_statement(Parser* parser) {
-    Token token = parser_peek(parser);
-    switch (token.type) {
+AstNode* parser_parse(Parser* parser) {
+    return parse_program(parser);
+}
+
+/* ------------------------------------------------------------------
+ * TOKEN HELPERS
+ * ------------------------------------------------------------------ */
+static Token parser_peek(Parser* parser) {
+    if (parser->current < parser->token_count) {
+        return parser->tokens[parser->current];
+    }
+    Token eof;
+    memset(&eof, 0, sizeof(eof));
+    eof.type = TOKEN_EOF;
+    return eof;
+}
+
+static Token parser_advance(Parser* parser) {
+    if (parser->current < parser->token_count) {
+        return parser->tokens[parser->current++];
+    }
+    Token eof;
+    memset(&eof, 0, sizeof(eof));
+    eof.type = TOKEN_EOF;
+    return eof;
+}
+
+static int parser_match(Parser* parser, TokenType type) {
+    if (parser_peek(parser).type == type) {
+        parser_advance(parser);
+        return 1;
+    }
+    return 0;
+}
+
+static void parser_consume(Parser* parser, TokenType type, const char* error_message) {
+    if (!parser_match(parser, type)) {
+        Token t = parser_peek(parser);
+        fprintf(stderr, "Parse error at %s:%d: %s (got token '%s')\n",
+                t.location.file, (int)t.location.line, error_message, t.text);
+    }
+}
+
+/* ------------------------------------------------------------------
+ * UTILITY: Appending an AstNode* to a dynamic array
+ * ------------------------------------------------------------------ */
+static void append_node(AstNode*** array_ptr, size_t* count_ptr, AstNode* node) {
+    if (!node) return;
+    size_t old_count = *count_ptr;
+    *array_ptr = (AstNode**)realloc(*array_ptr, sizeof(AstNode*) * (old_count + 1));
+    (*array_ptr)[old_count] = node;
+    *count_ptr = old_count + 1;
+}
+
+static AstNode* make_block_node(const SourceLocation* loc, AstNode** stmts, size_t count) {
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_BLOCK;
+    if (loc) node->loc = *loc;
+    node->as.block.statement_count = count;
+    node->as.block.statements = stmts;
+    return node;
+}
+
+/* ------------------------------------------------------------------
+ * PROGRAM & DECLARATIONS
+ * ------------------------------------------------------------------ */
+static AstNode* parse_program(Parser* parser) {
+    Token startTok = parser_peek(parser);
+
+    AstNode** items = NULL;
+    size_t item_count = 0;
+
+    while (parser_peek(parser).type != TOKEN_EOF) {
+        AstNode* decl = parse_declaration(parser);
+        if (!decl) {
+            parser_advance(parser); 
+            continue;
+        }
+        append_node(&items, &item_count, decl);
+    }
+
+    return make_block_node(&startTok.location, items, item_count);
+}
+
+/* parse_declaration => frame, func, class, import, var/const, else statement fallback */
+static AstNode* parse_declaration(Parser* parser) {
+    Token t = parser_peek(parser);
+
+    switch (t.type) {
         case TOKEN_FRAME:
             return parse_frame(parser);
+        case TOKEN_FUNC:
+            return parse_func_decl(parser);
+        case TOKEN_CLASS:
+            return parse_class_decl(parser);
+        case TOKEN_IMPORT:
+            return parse_import_decl(parser);
         case TOKEN_VAR:
         case TOKEN_CONST:
             return parse_var_decl(parser);
-        case TOKEN_FUNC:
-            return parse_func_decl(parser);
-        case TOKEN_IF:
-            return parse_if_statement(parser);
-        case TOKEN_LOOP:
-            return parse_loop_statement(parser);
-        case TOKEN_ON_ERROR:
-            return parse_error_handler(parser);
         default:
-            return parse_expression(parser);
+            /* Not recognized as a decl => parse statement */
+            return parse_statement(parser);
     }
 }
 
-/**
- * Parse a frame declaration.
- * Syntax: frame <Identifier> { <body> }
- */
+/* ------------------------------------------------------------------
+ * STATEMENTS
+ * ------------------------------------------------------------------ */
+static AstNode* parse_statement(Parser* parser) {
+    Token t = parser_peek(parser);
+
+    switch (t.type) {
+        case TOKEN_IF:    return parse_if_stmt(parser);
+        case TOKEN_WHILE: return parse_while_stmt(parser);
+        case TOKEN_FOR:   return parse_for_stmt(parser);
+        case TOKEN_SWITCH:return parse_switch_stmt(parser);
+        case TOKEN_TRY:   return parse_try_catch_stmt(parser);
+        case TOKEN_ON_ERROR: return parse_on_error_stmt(parser);
+        case TOKEN_LBRACE:return parse_block(parser);
+        default:
+            return parse_expression_stmt(parser);
+    }
+}
+
+/* parse_block => { statements } => AST_NODE_BLOCK */
+static AstNode* parse_block(Parser* parser) {
+    Token brace = parser_advance(parser); /* consume '{' */
+
+    AstNode** stmts = NULL;
+    size_t stmt_count = 0;
+
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* st = parse_statement(parser);
+        if (!st) {
+            parser_advance(parser);
+            continue;
+        }
+        append_node(&stmts, &stmt_count, st);
+    }
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' after block.");
+
+    return make_block_node(&brace.location, stmts, stmt_count);
+}
+
+/* parse_expression_stmt => parse expr, optional semicolon => AST_NODE_EXPR_STMT */
+static AstNode* parse_expression_stmt(Parser* parser) {
+    AstNode* expr = parse_expression(parser);
+    parser_match(parser, TOKEN_SEMICOLON);
+
+    AstNode* stmt = (AstNode*)calloc(1, sizeof(AstNode));
+    stmt->type = AST_NODE_EXPR_STMT;
+    stmt->loc = expr->loc;
+    /* We'll store the expression in the .unary.expr field for convenience (or define your own). */
+    stmt->as.unary.expr = expr;
+    return stmt;
+}
+
+/* Frame => frame <id> { ... } => AST_NODE_FRAME */
 static AstNode* parse_frame(Parser* parser) {
-    Token frameToken = parser_advance(parser); // consume 'frame'
-    const SourceLocation* frameLoc = &frameToken.location;
-    Token id = parser_advance(parser); // expect identifier
-    AstNode* frame_node = create_ast_node(AST_NODE_FRAME, id.text, &id.location);
-    // Expect '{'
-    if (!parser_match(parser, TOKEN_LBRACE)) {
-        fprintf(stderr, "Error: expected '{' after frame declaration at %s:%d\n", id.location.file, id.location.line);
-        return frame_node;
-    }
-    // Parse frame body (a sequence of statements)
-    AstNode* body_head = NULL;
-    AstNode* body_current = NULL;
-    while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
+    Token frameTok = parser_advance(parser); // consume 'frame'
+    Token idTok = parser_advance(parser);    // the name
+    parser_consume(parser, TOKEN_LBRACE, "Expected '{' after frame name.");
+
+    AstNode** body = NULL;
+    size_t body_count = 0;
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* s = parse_statement(parser);
+        if (!s) {
             parser_advance(parser);
             continue;
         }
-        if (!body_head) {
-            body_head = stmt;
-            body_current = stmt;
-        } else {
-            body_current->next = stmt;
-            body_current = stmt;
-        }
+        append_node(&body, &body_count, s);
     }
-    // Consume '}'
-    if (!parser_match(parser, TOKEN_RBRACE)) {
-        fprintf(stderr, "Error: expected '}' at end of frame declaration at %s:%d\n", id.location.file, id.location.line);
-    }
-    frame_node->left = body_head;
-    return frame_node;
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' at end of frame.");
+
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_FRAME;
+    node->loc = frameTok.location;
+    node->as.frame_decl.frame_name = strdup(idTok.text);
+    node->as.frame_decl.body_statements = body;
+    node->as.frame_decl.body_count = body_count;
+    return node;
 }
 
-/**
- * Parse a variable (or constant) declaration.
- * Syntax: var|const <Identifier> (= <expression>)? ;
- */
+/* var|const <id> = expr? ; => AST_NODE_VAR_DECL or AST_NODE_CONST_DECL */
 static AstNode* parse_var_decl(Parser* parser) {
-    Token declType = parser_advance(parser); // consume 'var' or 'const'
-    const SourceLocation* declLoc = &declType.location;
-    Token id = parser_advance(parser); // identifier
-    AstNode* var_node = create_ast_node(AST_NODE_VAR_DECL, id.text, &id.location);
-    // Check for assignment operator.
+    Token declTok = parser_advance(parser);
+    bool is_const = (declTok.type == TOKEN_CONST);
+
+    Token nameTok = parser_advance(parser);
+    AstNode* init_expr = NULL;
     if (parser_match(parser, TOKEN_ASSIGN)) {
-        AstNode* init_expr = parse_expression(parser);
-        var_node->right = init_expr;
+        init_expr = parse_expression(parser);
     }
-    // Optionally, consume semicolon.
-    if (parser_peek(parser).type == TOKEN_SEMICOLON) {
-        parser_advance(parser);
-    }
-    return var_node;
+    parser_match(parser, TOKEN_SEMICOLON);
+
+    AstNode* varNode = (AstNode*)calloc(1, sizeof(AstNode));
+    varNode->type = is_const ? AST_NODE_CONST_DECL : AST_NODE_VAR_DECL;
+    varNode->loc = declTok.location;
+    varNode->as.var_decl.is_const = is_const;
+    varNode->as.var_decl.var_name = strdup(nameTok.text);
+    varNode->as.var_decl.initializer = init_expr;
+    return varNode;
 }
 
-/**
- * Parse a function declaration.
- * Syntax: func <Identifier> ( <parameters> ) { <body> }
- */
+/* func <name>(params){body} => AST_NODE_FUNC_DECL */
 static AstNode* parse_func_decl(Parser* parser) {
-    Token funcToken = parser_advance(parser); // consume 'func'
-    const SourceLocation* funcLoc = &funcToken.location;
-    Token id = parser_advance(parser); // function name
-    AstNode* func_node = create_ast_node(AST_NODE_FUNC_DECL, id.text, &id.location);
-    // Expect '(' for parameters.
-    if (!parser_match(parser, TOKEN_LPAREN)) {
-        fprintf(stderr, "Error: expected '(' after function name %s at %s:%d\n", id.text, id.location.file, id.location.line);
-        return func_node;
-    }
-    // Parse parameters into a comma-separated string.
-    char param_buffer[256] = {0};
-    while (parser_peek(parser).type != TOKEN_RPAREN && parser_peek(parser).type != TOKEN_EOF) {
-        Token param = parser_advance(parser);
-        strncat(param_buffer, param.text, sizeof(param_buffer) - strlen(param_buffer) - 1);
-        if (parser_peek(parser).type == TOKEN_COMMA) {
-            parser_advance(parser);
-            strncat(param_buffer, ",", sizeof(param_buffer) - strlen(param_buffer) - 1);
+    Token funcTok = parser_advance(parser);
+    Token nameTok = parser_advance(parser);
+
+    parser_consume(parser, TOKEN_LPAREN, "Expected '(' after function name.");
+
+    char** params = NULL;
+    size_t param_count = 0;
+    while (parser_peek(parser).type != TOKEN_RPAREN &&
+           parser_peek(parser).type != TOKEN_EOF) 
+    {
+        Token p = parser_advance(parser);
+        params = (char**)realloc(params, sizeof(char*) * (param_count + 1));
+        params[param_count] = strdup(p.text);
+        param_count++;
+        if (!parser_match(parser, TOKEN_COMMA)) {
+            break;
         }
     }
-    // Consume ')'
-    parser_match(parser, TOKEN_RPAREN);
-    /* Store parameters in the function node's value.
-       (Reusing the 'value' field for simplicity.) */
-    free(func_node->value);
-    func_node->value = strdup(param_buffer);
-    // Expect '{' for the function body.
-    if (!parser_match(parser, TOKEN_LBRACE)) {
-        fprintf(stderr, "Error: expected '{' after function declaration for %s at %s:%d.\n", id.text, id.location.file, id.location.line);
-        return func_node;
-    }
-    // Parse the function body.
-    AstNode* body_head = NULL;
-    AstNode* body_current = NULL;
-    while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after parameters.");
+
+    parser_consume(parser, TOKEN_LBRACE, "Expected '{' before function body.");
+
+    AstNode** body_stmts = NULL;
+    size_t body_count = 0;
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* s = parse_statement(parser);
+        if (!s) {
             parser_advance(parser);
             continue;
         }
-        if (!body_head) {
-            body_head = stmt;
-            body_current = stmt;
-        } else {
-            body_current->next = stmt;
-            body_current = stmt;
-        }
+        append_node(&body_stmts, &body_count, s);
     }
-    // Consume '}'
-    if (!parser_match(parser, TOKEN_RBRACE)) {
-        fprintf(stderr, "Error: expected '}' at end of function %s at %s:%d.\n", id.text, id.location.file, id.location.line);
-    }
-    func_node->left = body_head;
-    return func_node;
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' after function body.");
+
+    /* Build a block node for the body */
+    AstNode* bodyBlock = make_block_node(&funcTok.location, body_stmts, body_count);
+
+    AstNode* funcNode = (AstNode*)calloc(1, sizeof(AstNode));
+    funcNode->type = AST_NODE_FUNC_DECL;
+    funcNode->loc = funcTok.location;
+    funcNode->as.func_decl.func_name = strdup(nameTok.text);
+    funcNode->as.func_decl.param_count = param_count;
+    funcNode->as.func_decl.param_names = params;
+    funcNode->as.func_decl.body = bodyBlock;
+    return funcNode;
 }
 
-/**
- * Parse an if statement.
- * Syntax: if (<condition>) { <then_body> } (else { <else_body> })?
- */
-static AstNode* parse_if_statement(Parser* parser) {
-    Token ifToken = parser_advance(parser); // consume 'if'
-    const SourceLocation* ifLoc = &ifToken.location;
-    // Expect '(' for condition.
-    if (!parser_match(parser, TOKEN_LPAREN)) {
-        fprintf(stderr, "Error: expected '(' after 'if' at %s:%d\n", ifLoc->file, ifLoc->line);
-    }
-    AstNode* condition = parse_expression(parser);
-    if (!parser_match(parser, TOKEN_RPAREN)) {
-        fprintf(stderr, "Error: expected ')' after if condition at %s:%d\n", ifLoc->file, ifLoc->line);
-    }
-    // Expect '{' for then-body.
-    if (!parser_match(parser, TOKEN_LBRACE)) {
-        fprintf(stderr, "Error: expected '{' for if body at %s:%d\n", ifLoc->file, ifLoc->line);
-    }
-    AstNode* then_body = NULL;
-    AstNode* then_current = NULL;
-    while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
+/* class <name> { ... } => AST_NODE_CLASS_DECL */
+static AstNode* parse_class_decl(Parser* parser) {
+    Token classTok = parser_advance(parser);
+    Token nameTok = parser_advance(parser);
+
+    parser_consume(parser, TOKEN_LBRACE, "Expected '{' after class name.");
+
+    AstNode** members = NULL;
+    size_t member_count = 0;
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* m = parse_declaration(parser);
+        if (!m) {
             parser_advance(parser);
             continue;
         }
-        if (!then_body) {
-            then_body = stmt;
-            then_current = stmt;
-        } else {
-            then_current->next = stmt;
-            then_current = stmt;
-        }
+        append_node(&members, &member_count, m);
     }
-    if (!parser_match(parser, TOKEN_RBRACE)) {
-        fprintf(stderr, "Error: expected '}' at end of if body at %s:%d\n", ifLoc->file, ifLoc->line);
-    }
-    // Create the if node.
-    AstNode* if_node = create_ast_node(AST_NODE_IF, NULL, ifLoc);
-    if_node->left = condition;
-    if_node->right = then_body;
-    // Optionally, parse an else clause.
-    if (parser_peek(parser).type == TOKEN_ELSE) {
-        parser_advance(parser); // consume 'else'
-        if (!parser_match(parser, TOKEN_LBRACE)) {
-            fprintf(stderr, "Error: expected '{' for else body at %s:%d\n", ifLoc->file, ifLoc->line);
-        }
-        AstNode* else_body = NULL;
-        AstNode* else_current = NULL;
-        while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-            AstNode* stmt = parse_statement(parser);
-            if (!stmt) {
-                parser_advance(parser);
-                continue;
-            }
-            if (!else_body) {
-                else_body = stmt;
-                else_current = stmt;
-            } else {
-                else_current->next = stmt;
-                else_current = stmt;
-            }
-        }
-        if (!parser_match(parser, TOKEN_RBRACE)) {
-            fprintf(stderr, "Error: expected '}' at end of else body at %s:%d\n", ifLoc->file, ifLoc->line);
-        }
-        // Attach else branch to the if node using the 'next' pointer.
-        if_node->next = else_body;
-    }
-    return if_node;
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' after class body.");
+
+    AstNode* classNode = (AstNode*)calloc(1, sizeof(AstNode));
+    classNode->type = AST_NODE_CLASS_DECL;
+    classNode->loc = classTok.location;
+    classNode->as.class_decl.class_name = strdup(nameTok.text);
+    classNode->as.class_decl.members = members;
+    classNode->as.class_decl.member_count = member_count;
+    return classNode;
 }
 
-/**
- * Parse a loop statement.
- * Syntax: loop { <body> }
- */
-static AstNode* parse_loop_statement(Parser* parser) {
-    Token loopToken = parser_advance(parser); // consume 'loop'
-    const SourceLocation* loopLoc = &loopToken.location;
-    // Expect '{'
-    if (!parser_match(parser, TOKEN_LBRACE)) {
-        fprintf(stderr, "Error: expected '{' after 'loop' at %s:%d\n", loopLoc->file, loopLoc->line);
+/* import "module"; => AST_EXPR_LITERAL or a custom node */
+static AstNode* parse_import_decl(Parser* parser) {
+    Token importTok = parser_advance(parser);
+    Token modTok = parser_advance(parser);
+    parser_match(parser, TOKEN_SEMICOLON);
+
+    /* Let's just treat it as an expression-literal node with literal_type=TOKEN_IMPORT */
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_EXPR_LITERAL; 
+    node->loc = importTok.location;
+    node->as.literal.literal_type = TOKEN_IMPORT; 
+    node->as.literal.str_val = strdup(modTok.text);
+    return node;
+}
+
+/* if (<cond>) <stmt> (else <stmt>) => AST_NODE_IF */
+static AstNode* parse_if_stmt(Parser* parser) {
+    Token ifTok = parser_advance(parser); 
+    parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'if'.");
+    AstNode* cond = parse_expression(parser);
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after if condition.");
+
+    AstNode* thenBranch = parse_statement(parser);
+    AstNode* elseBranch = NULL;
+    if (parser_match(parser, TOKEN_ELSE)) {
+        elseBranch = parse_statement(parser);
     }
-    AstNode* body_head = NULL;
-    AstNode* body_current = NULL;
-    while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
+
+    AstNode* ifNode = (AstNode*)calloc(1, sizeof(AstNode));
+    ifNode->type = AST_NODE_IF;
+    ifNode->loc = ifTok.location;
+    ifNode->as.if_stmt.condition = cond;
+    ifNode->as.if_stmt.then_branch = thenBranch;
+    ifNode->as.if_stmt.else_branch = elseBranch;
+    return ifNode;
+}
+
+/* while (<cond>) <stmt> => AST_NODE_WHILE_STMT */
+static AstNode* parse_while_stmt(Parser* parser) {
+    Token wTok = parser_advance(parser);
+    parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'while'.");
+    AstNode* cond = parse_expression(parser);
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after while condition.");
+
+    AstNode* body = parse_statement(parser);
+
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_WHILE_STMT;
+    node->loc = wTok.location;
+    node->as.while_stmt.condition = cond;
+    node->as.while_stmt.body = body;
+    return node;
+}
+
+/* for (<init>; <cond>; <incr>) <stmt> => AST_NODE_FOR_STMT */
+static AstNode* parse_for_stmt(Parser* parser) {
+    Token fTok = parser_advance(parser);
+    parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'for'.");
+    AstNode* init = parse_expression(parser);
+    parser_consume(parser, TOKEN_SEMICOLON, "Expected ';' after for initializer.");
+    AstNode* cond = parse_expression(parser);
+    parser_consume(parser, TOKEN_SEMICOLON, "Expected ';' after for condition.");
+    AstNode* incr = parse_expression(parser);
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after for clauses.");
+    AstNode* body = parse_statement(parser);
+
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_FOR_STMT;
+    node->loc = fTok.location;
+    node->as.for_stmt.init = init;
+    node->as.for_stmt.condition = cond;
+    node->as.for_stmt.increment = incr;
+    node->as.for_stmt.body = body;
+    return node;
+}
+
+/* switch (<expr>) { ... } => partial example => store as AST_EXPR_BINARY with op=TOKEN_SWITCH or your custom node */
+static AstNode* parse_switch_stmt(Parser* parser) {
+    Token swTok = parser_advance(parser);
+    parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'switch'.");
+    AstNode* expr = parse_expression(parser);
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after switch expr.");
+
+    parser_consume(parser, TOKEN_LBRACE, "Expected '{' after switch(...).");
+    /* parse cases (we won't show every detail here) */
+    AstNode** cases = NULL;
+    size_t case_count = 0;
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* c = parse_statement(parser);
+        if (!c) {
             parser_advance(parser);
             continue;
         }
-        if (!body_head) {
-            body_head = stmt;
-            body_current = stmt;
-        } else {
-            body_current->next = stmt;
-            body_current = stmt;
-        }
+        append_node(&cases, &case_count, c);
     }
-    if (!parser_match(parser, TOKEN_RBRACE)) {
-        fprintf(stderr, "Error: expected '}' at end of loop body at %s:%d\n", loopLoc->file, loopLoc->line);
-    }
-    AstNode* loop_node = create_ast_node(AST_NODE_LOOP, NULL, loopLoc);
-    loop_node->left = body_head;
-    return loop_node;
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' after switch.");
+
+    /* For demonstration, store them in a block node. */
+    AstNode* caseBlock = make_block_node(&swTok.location, cases, case_count);
+
+    /* If you have a dedicated union field, use that. 
+       We'll do an AST_EXPR_BINARY with op=TOKEN_SWITCH, left=expr, right=caseBlock. */
+    AstNode* switchNode = make_expr_binary(TOKEN_SWITCH, expr, caseBlock, &swTok.location);
+    return switchNode;
 }
 
-/**
- * Parse an error handling block.
- * Syntax: on_error { <handler_body> }
- */
-static AstNode* parse_error_handler(Parser* parser) {
-    Token errToken = parser_advance(parser); // consume 'on_error'
-    const SourceLocation* errLoc = &errToken.location;
-    // Expect '{'
-    if (!parser_match(parser, TOKEN_LBRACE)) {
-        fprintf(stderr, "Error: expected '{' after 'on_error' at %s:%d\n", errLoc->file, errLoc->line);
+/* try <stmt> catch <stmt>? => AST_NODE_TRY_CATCH */
+static AstNode* parse_try_catch_stmt(Parser* parser) {
+    Token tryTok = parser_advance(parser); // 'try'
+    AstNode* tryBlock = parse_statement(parser);
+
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_TRY_CATCH;
+    node->loc = tryTok.location;
+    node->as.error_handler.handler_body = tryBlock; 
+
+    if (parser_match(parser, TOKEN_CATCH)) {
+        /* parse catch statement => we might store it in node->next_sibling or a new union field. 
+           This example won't demonstrate everything. */
+        AstNode* catchBlock = parse_statement(parser);
+        node->next_sibling = catchBlock;
     }
-    AstNode* handler_body = NULL;
-    AstNode* handler_current = NULL;
-    while (parser_peek(parser).type != TOKEN_RBRACE && parser_peek(parser).type != TOKEN_EOF) {
-        AstNode* stmt = parse_statement(parser);
-        if (!stmt) {
+    return node;
+}
+
+/* on_error { ... } => AST_NODE_ERROR_HANDLER */
+static AstNode* parse_on_error_stmt(Parser* parser) {
+    Token errTok = parser_advance(parser);
+    parser_consume(parser, TOKEN_LBRACE, "Expected '{' after on_error.");
+
+    AstNode** stmts = NULL;
+    size_t stmt_count = 0;
+    while (parser_peek(parser).type != TOKEN_RBRACE &&
+           parser_peek(parser).type != TOKEN_EOF)
+    {
+        AstNode* st = parse_statement(parser);
+        if (!st) {
             parser_advance(parser);
             continue;
         }
-        if (!handler_body) {
-            handler_body = stmt;
-            handler_current = stmt;
-        } else {
-            handler_current->next = stmt;
-            handler_current = stmt;
-        }
+        append_node(&stmts, &stmt_count, st);
     }
-    if (!parser_match(parser, TOKEN_RBRACE)) {
-        fprintf(stderr, "Error: expected '}' at end of on_error block at %s:%d\n", errLoc->file, errLoc->line);
-    }
-    AstNode* error_node = create_ast_node(AST_NODE_ERROR_HANDLER, NULL, errLoc);
-    error_node->left = handler_body;
-    return error_node;
+    parser_consume(parser, TOKEN_RBRACE, "Expected '}' after on_error block.");
+
+    /* store them in a block node */
+    AstNode* block = make_block_node(&errTok.location, stmts, stmt_count);
+
+    AstNode* errNode = (AstNode*)calloc(1, sizeof(AstNode));
+    errNode->type = AST_NODE_ERROR_HANDLER;
+    errNode->loc = errTok.location;
+    errNode->as.error_handler.handler_body = block;
+    return errNode;
 }
 
-/**
- * Parse a simple expression.
- * For now, this implementation only handles literal or identifier expressions.
- */
+/* ------------------------------------------------------------------
+ * EXPRESSIONS
+ * ------------------------------------------------------------------ */
 static AstNode* parse_expression(Parser* parser) {
-    Token token = parser_advance(parser);
-    return create_ast_node(AST_NODE_EXPR, token.text, &token.location);
+    return parse_assignment(parser);
+}
+
+static AstNode* parse_assignment(Parser* parser) {
+    AstNode* left = parse_logical_or(parser);
+    Token t = parser_peek(parser);
+
+    if (t.type == TOKEN_ASSIGN    || t.type == TOKEN_PLUS_ASSIGN ||
+        t.type == TOKEN_MINUS_ASSIGN || t.type == TOKEN_STAR_ASSIGN ||
+        t.type == TOKEN_SLASH_ASSIGN || t.type == TOKEN_MOD_ASSIGN)
+    {
+        parser_advance(parser);
+        AstNode* right = parse_assignment(parser);
+        return make_expr_binary(t.type, left, right, &t.location);
+    }
+    return left;
+}
+
+static AstNode* parse_logical_or(Parser* parser) {
+    AstNode* node = parse_logical_and(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_OR) {
+            parser_advance(parser);
+            AstNode* rhs = parse_logical_and(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_logical_and(Parser* parser) {
+    AstNode* node = parse_bitwise_or(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_AND) {
+            parser_advance(parser);
+            AstNode* rhs = parse_bitwise_or(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_bitwise_or(Parser* parser) {
+    AstNode* node = parse_bitwise_xor(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_BIT_OR) {
+            parser_advance(parser);
+            AstNode* rhs = parse_bitwise_xor(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_bitwise_xor(Parser* parser) {
+    AstNode* node = parse_bitwise_and(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_BIT_XOR) {
+            parser_advance(parser);
+            AstNode* rhs = parse_bitwise_and(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_bitwise_and(Parser* parser) {
+    AstNode* node = parse_equality(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_BIT_AND) {
+            parser_advance(parser);
+            AstNode* rhs = parse_equality(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_equality(Parser* parser) {
+    AstNode* node = parse_comparison(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_EQ || t.type == TOKEN_NEQ) {
+            parser_advance(parser);
+            AstNode* rhs = parse_comparison(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_comparison(Parser* parser) {
+    AstNode* node = parse_term(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_LT || t.type == TOKEN_GT ||
+            t.type == TOKEN_LTE || t.type == TOKEN_GTE)
+        {
+            parser_advance(parser);
+            AstNode* rhs = parse_term(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_term(Parser* parser) {
+    AstNode* node = parse_factor(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_PLUS || t.type == TOKEN_MINUS) {
+            parser_advance(parser);
+            AstNode* rhs = parse_factor(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_factor(Parser* parser) {
+    AstNode* node = parse_power(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_STAR || t.type == TOKEN_SLASH || t.type == TOKEN_PERCENT) {
+            parser_advance(parser);
+            AstNode* rhs = parse_power(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_power(Parser* parser) {
+    AstNode* node = parse_unary(parser);
+    for (;;) {
+        Token t = parser_peek(parser);
+        if (t.type == TOKEN_POW) {
+            parser_advance(parser);
+            AstNode* rhs = parse_unary(parser);
+            node = make_expr_binary(t.type, node, rhs, &t.location);
+        } else {
+            break;
+        }
+    }
+    return node;
+}
+
+static AstNode* parse_unary(Parser* parser) {
+    Token t = parser_peek(parser);
+    if (t.type == TOKEN_MINUS || t.type == TOKEN_PLUS ||
+        t.type == TOKEN_NOT   || t.type == TOKEN_BIT_NOT ||
+        t.type == TOKEN_INCREMENT || t.type == TOKEN_DECREMENT)
+    {
+        parser_advance(parser);
+        AstNode* sub = parse_unary(parser);
+        return make_expr_unary(t.type, sub, &t.location);
+    }
+    return parse_primary(parser);
+}
+
+/* parse_primary => docstring, regex, literal, identifier, interpolation, parentheses, etc. */
+static AstNode* parse_primary(Parser* parser) {
+    Token t = parser_peek(parser);
+
+    switch (t.type) {
+        case TOKEN_DOCSTRING: {
+            parser_advance(parser);
+            /* If you want a distinct node type, we do AST_NODE_DOCSTRING. 
+               Or you treat it as a literal with literal_type=TOKEN_DOCSTRING. */
+            AstNode* docNode = (AstNode*)calloc(1, sizeof(AstNode));
+            docNode->type = AST_NODE_DOCSTRING;
+            docNode->loc = t.location;
+            docNode->as.literal.literal_type = TOKEN_DOCSTRING;
+            docNode->as.literal.str_val = strdup(t.text);
+            return docNode;
+        }
+        case TOKEN_REGEX: {
+            parser_advance(parser);
+            AstNode* regNode = (AstNode*)calloc(1, sizeof(AstNode));
+            regNode->type = AST_NODE_REGEX;
+            regNode->loc = t.location;
+            regNode->as.literal.literal_type = TOKEN_REGEX;
+            regNode->as.literal.str_val = strdup(t.text);
+            return regNode;
+        }
+        case TOKEN_INTERPOLATION_START: {
+            Token startTok = parser_advance(parser); 
+            AstNode* innerExpr = parse_expression(parser);
+            parser_consume(parser, TOKEN_INTERPOLATION_END, "Expected '}' after interpolation expression.");
+            /* We'll create an AST_EXPR_INTERPOLATION node. */
+            AstNode* interp = (AstNode*)calloc(1, sizeof(AstNode));
+            interp->type = AST_EXPR_INTERPOLATION;
+            interp->loc = startTok.location;
+            interp->as.interpolation.expr = innerExpr;
+            return interp;
+        }
+        case TOKEN_LPAREN: {
+            parser_advance(parser);
+            AstNode* e = parse_expression(parser);
+            parser_consume(parser, TOKEN_RPAREN, "Expected ')' after parenthesized expr.");
+            return e;
+        }
+        case TOKEN_INTEGER:
+        case TOKEN_FLOAT:
+        case TOKEN_STRING:
+        case TOKEN_BOOL_TRUE:
+        case TOKEN_BOOL_FALSE:
+        {
+            /* treat as a literal expression */
+            Token litTok = parser_advance(parser);
+            return make_expr_literal(&litTok);
+        }
+        case TOKEN_IDENTIFIER: {
+            Token idTok = parser_advance(parser);
+            return make_expr_identifier(&idTok);
+        }
+        default:
+            /* fallback => error node or skip */
+            fprintf(stderr, "Parse error at %s:%d: unexpected token '%s'\n",
+                    t.location.file, (int)t.location.line, t.text);
+            parser_advance(parser);
+            return NULL;
+    }
+}
+
+/* ------------------------------------------------------------------
+ * Constructors for expressions
+ * ------------------------------------------------------------------ */
+static AstNode* make_expr_literal(const Token* tok) {
+    /* build an AST_EXPR_LITERAL node */
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_EXPR_LITERAL;
+    node->loc = tok->location;
+    node->as.literal.literal_type = tok->type;
+    switch (tok->type) {
+        case TOKEN_INTEGER:
+            node->as.literal.i64_val = atoll(tok->text);
+            break;
+        case TOKEN_FLOAT:
+            node->as.literal.f64_val = atof(tok->text);
+            break;
+        case TOKEN_BOOL_TRUE:
+            node->as.literal.bool_val = true;
+            break;
+        case TOKEN_BOOL_FALSE:
+            node->as.literal.bool_val = false;
+            break;
+        case TOKEN_STRING:
+            node->as.literal.str_val = strdup(tok->text);
+            break;
+        default:
+            /* If docstring or regex appear here, handle them, or fallback */
+            node->as.literal.str_val = strdup(tok->text);
+            break;
+    }
+    return node;
+}
+
+static AstNode* make_expr_identifier(const Token* tok) {
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_EXPR_IDENTIFIER;
+    node->loc = tok->location;
+    node->as.ident.name = strdup(tok->text);
+    return node;
+}
+
+static AstNode* make_expr_binary(TokenType op, AstNode* left, AstNode* right, const SourceLocation* loc) {
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_EXPR_BINARY;
+    if (loc) node->loc = *loc;
+    node->as.binary.op = op;
+    node->as.binary.left = left;
+    node->as.binary.right = right;
+    return node;
+}
+
+static AstNode* make_expr_unary(TokenType op, AstNode* expr, const SourceLocation* loc) {
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_EXPR_UNARY;
+    if (loc) node->loc = *loc;
+    node->as.unary.op = op;
+    node->as.unary.expr = expr;
+    return node;
 }

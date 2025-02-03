@@ -3,13 +3,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>    // Added for bool
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /* ----------------------------------------------------------
-   Version Information
+    Version Information
    ---------------------------------------------------------- */
 #define OSFL_VERSION_MAJOR 0
 #define OSFL_VERSION_MINOR 1
@@ -17,7 +18,7 @@ extern "C" {
 #define OSFL_VERSION_STRING "0.1.0"
 
 /* ----------------------------------------------------------
-   Configuration Constants
+    Configuration Constants
    ---------------------------------------------------------- */
 #define OSFL_MAX_STRING_LENGTH 1024
 #define OSFL_MAX_ERROR_LENGTH  128
@@ -25,7 +26,7 @@ extern "C" {
 #define OSFL_MAX_IDENTIFIER_LENGTH 64
 
 /* ----------------------------------------------------------
-   Status Codes and Error Handling
+    Status Codes and Error Handling
    ---------------------------------------------------------- */
 typedef enum OSFLStatus {
     OSFL_SUCCESS = 0,
@@ -50,19 +51,19 @@ typedef struct {
 } OSFLError;
 
 /* ----------------------------------------------------------
-   Configuration Structures
+    Configuration Structures
    ---------------------------------------------------------- */
 typedef struct {
     size_t tab_width;           /* Width of tab characters */
     bool include_comments;      /* Whether to include comments in tokens */
     const char* input_file;     /* Input source file */
     const char* output_file;    /* Output file (if any) */
-    bool debug_mode;           /* Enable debug output */
-    bool optimize;             /* Enable optimizations */
+    bool debug_mode;            /* Enable debug output */
+    bool optimize;              /* Enable optimizations */
 } OSFLConfig;
 
 /* ----------------------------------------------------------
-   Core API Functions
+    Core API Functions
    ---------------------------------------------------------- */
 
 /**

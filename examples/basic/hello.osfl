@@ -1,4 +1,8 @@
-func main() {
-    var message = "Hello, OSFL!";
-    print(message);
+frame Main {
+    var greeting = "Hello, OSFL!";
+
+    func main() {
+        print(greeting);
+        return greeting;
+    }
 }
