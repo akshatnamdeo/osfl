@@ -2,3 +2,5 @@ clang -std=c11 -Wall -Wextra -I include -I src/lexer -o test/test_lexer test/tes
 ./test/test_lexer
 clang -std=c11 -Wall -Wextra -I include -I src/lexer -I src/parser -o test/test_parser test/test_parser.c src/parser/parser.c
 ./test/test_parser
+clang -std=c11 -Wall -Wextra -I include -I src/vm -o test/test_vm test/test_vm.c src/vm/vm.c src/vm/frame.c src/vm/memory.c
+./test/test_vm
