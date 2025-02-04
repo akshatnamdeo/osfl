@@ -1,0 +1,9 @@
+frame Main {
+    func main() {
+        var s = "Hello OSFL!";
+        print("Original:", s);
+        print("Uppercase:", to_upper(s));
+        print("Lowercase:", to_lower(s));
+        return 0;
+    }
+}

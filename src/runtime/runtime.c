@@ -87,6 +87,7 @@ OSFL_Value osfl_print(int arg_count, OSFL_Value* args) {
         }
     }
     printf("\n");
+    fflush(stdout);
     return VALUE_NULL;
 }
 

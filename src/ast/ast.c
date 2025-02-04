@@ -25,7 +25,7 @@ static char* ast_strdup(const char* s) {
     return dup;
 }
 
-AstNode* ast_make_literal(const SourceLocation* loc, TokenType literal_type, const char* text) {
+AstNode* ast_make_literal(const SourceLocation* loc, OSFLTokenType literal_type, const char* text) {
     AstNode* node = ast_alloc_node(AST_EXPR_LITERAL, loc);
     node->as.literal.literal_type = literal_type;
     switch (literal_type) {
@@ -53,7 +53,7 @@ AstNode* ast_make_literal(const SourceLocation* loc, TokenType literal_type, con
     return node;
 }
 
-AstNode* ast_make_binary(const SourceLocation* loc, TokenType op, AstNode* left, AstNode* right) {
+AstNode* ast_make_binary(const SourceLocation* loc, OSFLTokenType op, AstNode* left, AstNode* right) {
     AstNode* node = ast_alloc_node(AST_EXPR_BINARY, loc);
     node->as.binary.op = op;
     node->as.binary.left = left;
@@ -61,7 +61,7 @@ AstNode* ast_make_binary(const SourceLocation* loc, TokenType op, AstNode* left,
     return node;
 }
 
-AstNode* ast_make_unary(const SourceLocation* loc, TokenType op, AstNode* expr) {
+AstNode* ast_make_unary(const SourceLocation* loc, OSFLTokenType op, AstNode* expr) {
     AstNode* node = ast_alloc_node(AST_EXPR_UNARY, loc);
     node->as.unary.op = op;
     node->as.unary.expr = expr;

@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <direct.h>  // for _getcwd
+#define getcwd _getcwd
+#include <errno.h>
 
 #include "../../include/osfl.h"
 #include "../lexer/lexer.h"
@@ -14,9 +17,10 @@
 #include "../vm/vm.h"
 #include "../vm/frame.h"    /* For frame_create/destroy if needed */
 #include "../runtime/runtime.h" /* If you have a runtime layer */
+#include <excpt.h>
 
 /* ------------------------------------------------------------------
-   Global error storage
+    Global error storage
 ------------------------------------------------------------------ */
 static OSFLError g_osfl_last_error = {
     .code = OSFL_SUCCESS,
@@ -30,34 +34,46 @@ static OSFLError g_osfl_last_error = {
 static OSFLConfig g_osfl_current_config;
 
 /* ------------------------------------------------------------------
-   Helper for setting an error in g_osfl_last_error
+    Helper for setting an error in g_osfl_last_error
 ------------------------------------------------------------------ */
 static void set_osfl_error(OSFLStatus code, const char* msg, const char* file, size_t line, size_t column) {
     g_osfl_last_error.code = code;
-    strncpy(g_osfl_last_error.message, msg, sizeof(g_osfl_last_error.message)-1);
+    strncpy(g_osfl_last_error.message, msg, sizeof(g_osfl_last_error.message) - 1);
     g_osfl_last_error.file = file;
     g_osfl_last_error.line = line;
     g_osfl_last_error.column = column;
 }
 
 /* ------------------------------------------------------------------
-   Core API Implementations
+    Core API Implementations
 ------------------------------------------------------------------ */
 
 /**
  * Initialize the OSFL system
  */
 OSFLStatus osfl_init(const OSFLConfig* config) {
+    fprintf(stderr, "DEBUG: Entering osfl_init\n");
+
     /* Clear error */
     osfl_clear_error();
 
     if (!config) {
+        fprintf(stderr, "DEBUG: NULL config in osfl_init\n");
         set_osfl_error(OSFL_ERROR_INVALID_INPUT, "Null config in osfl_init", __FILE__, __LINE__, 0);
         return OSFL_ERROR_INVALID_INPUT;
     }
 
-    /* Copy the user config */
+    fprintf(stderr, "DEBUG: Copying config\n");
     g_osfl_current_config = *config;
+
+    fprintf(stderr, "DEBUG: Verifying config copy\n");
+    fprintf(stderr, "DEBUG: Config values after copy:\n");
+    fprintf(stderr, "  tab_width: %zu\n", g_osfl_current_config.tab_width);
+    fprintf(stderr, "  include_comments: %s\n", g_osfl_current_config.include_comments ? "true" : "false");
+    fprintf(stderr, "  input_file: %s\n", g_osfl_current_config.input_file ? g_osfl_current_config.input_file : "NULL");
+    fprintf(stderr, "  debug_mode: %s\n", g_osfl_current_config.debug_mode ? "true" : "false");
+
+    fprintf(stderr, "DEBUG: osfl_init completed successfully\n");
     return OSFL_SUCCESS;
 }
 
@@ -104,7 +120,6 @@ void osfl_clear_error(void) {
  *  6) vm_create => vm_run
  */
 OSFLStatus osfl_run_file(const char* filename) {
-    /* Clear error at start */
     osfl_clear_error();
 
     if (!filename) {
@@ -112,151 +127,188 @@ OSFLStatus osfl_run_file(const char* filename) {
         return OSFL_ERROR_INVALID_INPUT;
     }
 
-    /* 1) Read file into memory */
-    FILE* fp = fopen(filename, "rb");
-    if (!fp) {
-        char errbuf[128];
-        snprintf(errbuf, sizeof(errbuf), "Could not open file '%s'", filename);
-        set_osfl_error(OSFL_ERROR_FILE_IO, errbuf, __FILE__, __LINE__, 0);
-        return OSFL_ERROR_FILE_IO;
-    }
-    fseek(fp, 0, SEEK_END);
-    long size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    char* source = (char*)malloc(size + 1);
-    if (!source) {
+    char* source = NULL;
+    Token* tokens = NULL;
+    Lexer* lexer = NULL;
+    Parser* parser = NULL;
+    AstNode* root = NULL;
+    Bytecode* bc = NULL;
+    VM* vm = NULL;
+    OSFLStatus status = OSFL_SUCCESS;
+
+    __try {
+        /* 1) Read file into memory */
+        FILE* fp = fopen(filename, "rb");
+        if (!fp) {
+            char errbuf[128];
+            snprintf(errbuf, sizeof(errbuf), "Could not open file '%s'", filename);
+            set_osfl_error(OSFL_ERROR_FILE_IO, errbuf, __FILE__, __LINE__, 0);
+            status = OSFL_ERROR_FILE_IO;
+            goto cleanup;
+        }
+        fseek(fp, 0, SEEK_END);
+        long size = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+        source = (char*)malloc(size + 1);
+        if (!source) {
+            fclose(fp);
+            set_osfl_error(OSFL_ERROR_MEMORY_ALLOCATION, "Out of memory reading file", __FILE__, __LINE__, 0);
+            status = OSFL_ERROR_MEMORY_ALLOCATION;
+            goto cleanup;
+        }
+        size_t read_size = fread(source, 1, size, fp);
+        source[read_size] = '\0';
         fclose(fp);
-        set_osfl_error(OSFL_ERROR_MEMORY_ALLOCATION, "Out of memory reading file", __FILE__, __LINE__, 0);
-        return OSFL_ERROR_MEMORY_ALLOCATION;
-    }
-    fread(source, 1, size, fp);
-    source[size] = '\0';
-    fclose(fp);
 
-    /* 2) Lex => tokens */
-    LexerConfig lex_cfg = lexer_default_config();
-    lex_cfg.include_comments = g_osfl_current_config.include_comments; 
-    lex_cfg.file_name = filename; /* optional if you want error location to show the file */
-    Lexer* lexer = lexer_create(source, (size_t)size, lex_cfg);
-    if (!lexer) {
-        free(source);
-        set_osfl_error(OSFL_ERROR_LEXER, "Failed to create lexer", __FILE__, __LINE__, 0);
-        return OSFL_ERROR_LEXER;
-    }
+        /* 2) Lex => tokens */
+        LexerConfig lex_cfg = lexer_default_config();
+        lex_cfg.include_comments = g_osfl_current_config.include_comments;
+        lex_cfg.file_name = filename;
+        lexer = lexer_create(source, read_size, lex_cfg);
+        if (!lexer) {
+            free(source);
+            set_osfl_error(OSFL_ERROR_LEXER, "Failed to create lexer", __FILE__, __LINE__, 0);
+            status = OSFL_ERROR_LEXER;
+            goto cleanup;
+        }
 
-    Token tokens[20000]; /* or dynamic. For simplicity, we do a large stack array. */
-    size_t token_count = 0;
-    while (true) {
-        if (token_count >= 20000) {
-            set_osfl_error(OSFL_ERROR_LEXER, "Too many tokens (20000 limit)", __FILE__, __LINE__, 0);
+        size_t tokens_capacity = 1024;
+        tokens = (Token*)malloc(tokens_capacity * sizeof(Token));
+        if (!tokens) {
+            set_osfl_error(OSFL_ERROR_MEMORY_ALLOCATION, "Failed to allocate token buffer", __FILE__, __LINE__, 0);
+            status = OSFL_ERROR_MEMORY_ALLOCATION;
+            goto cleanup;
+        }
+
+        size_t token_count = 0;
+        while (true) {
+            if (token_count >= tokens_capacity) {
+                tokens_capacity *= 2;
+                Token* new_tokens = (Token*)realloc(tokens, tokens_capacity * sizeof(Token));
+                if (!new_tokens) {
+                    set_osfl_error(OSFL_ERROR_MEMORY_ALLOCATION, "Failed to grow token buffer", __FILE__, __LINE__, 0);
+                    status = OSFL_ERROR_MEMORY_ALLOCATION;
+                    goto cleanup;
+                }
+                tokens = new_tokens;
+            }
+
+            Token t = lexer_next_token(lexer);
+            tokens[token_count++] = t;
+            if (t.type == TOKEN_EOF || t.type == TOKEN_ERROR) {
+                break;
+            }
+        }
+
+        LexerError lexError = lexer_get_error(lexer);
+        if (lexError.type != LEXER_ERROR_NONE) {
+            OSFLStatus sc = OSFL_ERROR_LEXER;
+            set_osfl_error(sc, lexError.message, lexError.location.file, lexError.location.line, lexError.location.column);
             lexer_destroy(lexer);
             free(source);
-            return OSFL_ERROR_LEXER;
+            status = sc;
+            goto cleanup;
         }
-        Token t = lexer_next_token(lexer);
-        tokens[token_count++] = t;
-        if (t.type == TOKEN_EOF || t.type == TOKEN_ERROR) {
-            break;
+
+        /* 3) Parse => AST */
+        parser = parser_create(tokens, token_count);
+        root = parser_parse(parser);
+        parser_destroy(parser);
+
+        /* 4) Semantic analysis */
+        SemanticContext sem_ctx;
+        semantic_init(&sem_ctx);
+        semantic_analyze(root, &sem_ctx);
+        if (sem_ctx.error_count > 0) {
+            set_osfl_error(OSFL_ERROR_SYNTAX, "Semantic errors occurred", __FILE__, __LINE__, 0);
+            semantic_cleanup(&sem_ctx);
+            ast_destroy(root);
+            lexer_destroy(lexer);
+            free(source);
+            status = OSFL_ERROR_SYNTAX;
+            goto cleanup;
         }
-    }
-    /* Check for lexer errors */
-    LexerError lexError = lexer_get_error(lexer);
-    if (lexError.type != LEXER_ERROR_NONE) {
-        OSFLStatus sc = OSFL_ERROR_LEXER;
-        set_osfl_error(sc, lexError.message, lexError.location.file, lexError.location.line, lexError.location.column);
-        lexer_destroy(lexer);
-        free(source);
-        return sc;
-    }
-
-    /* 3) parse => AST */
-    Parser* parser = parser_create(tokens, token_count);
-    AstNode* root = parser_parse(parser);
-    /* If you track parser errors, check them. We'll assume it's stored in parser or the AST. */
-    parser_destroy(parser);
-
-    /* 4) semantic analysis => ensures correctness, type checks, etc. */
-    SemanticContext sem_ctx;
-    semantic_init(&sem_ctx);
-    semantic_analyze(root, &sem_ctx);
-    if (sem_ctx.error_count > 0) {
-        /* get details, store them. We'll do a single message for demonstration. */
-        set_osfl_error(OSFL_ERROR_SYNTAX, "Semantic errors occurred", __FILE__, __LINE__, 0);
         semantic_cleanup(&sem_ctx);
-        ast_destroy(root);
-        lexer_destroy(lexer);
+
+        /* 5) Compile => bytecode */
+        bc = compiler_compile_ast(root);
+        if (!bc) {
+            set_osfl_error(OSFL_ERROR_COMPILER, "Failed to compile AST", __FILE__, __LINE__, 0);
+            ast_destroy(root);
+            lexer_destroy(lexer);
+            free(source);
+            status = OSFL_ERROR_COMPILER;
+            goto cleanup;
+        }
+
+        /* 6) Create VM */
+        vm = vm_create(bc);
+        if (!vm) {
+            set_osfl_error(OSFL_ERROR_VM, "Failed to create VM", __FILE__, __LINE__, 0);
+            bytecode_destroy(bc);
+            ast_destroy(root);
+            lexer_destroy(lexer);
+            free(source);
+            status = OSFL_ERROR_VM;
+            goto cleanup;
+        }
+
+        /* Register native functions */
+        vm_register_native(vm, "print", osfl_print);
+        vm_register_native(vm, "split", osfl_split);
+        vm_register_native(vm, "join", osfl_join);
+        vm_register_native(vm, "substring", osfl_substring);
+        vm_register_native(vm, "replace", osfl_replace);
+        vm_register_native(vm, "to_upper", osfl_to_upper);
+        vm_register_native(vm, "to_lower", osfl_to_lower);
+        vm_register_native(vm, "len", osfl_len);
+        vm_register_native(vm, "append", osfl_append);
+        vm_register_native(vm, "pop", osfl_pop);
+        vm_register_native(vm, "insert", osfl_insert);
+        vm_register_native(vm, "remove", osfl_remove);
+        vm_register_native(vm, "sqrt", osfl_sqrt);
+        vm_register_native(vm, "pow", osfl_pow);
+        vm_register_native(vm, "sin", osfl_sin);
+        vm_register_native(vm, "cos", osfl_cos);
+        vm_register_native(vm, "tan", osfl_tan);
+        vm_register_native(vm, "log", osfl_log);
+        vm_register_native(vm, "abs", osfl_abs);
+        vm_register_native(vm, "int", osfl_int);
+        vm_register_native(vm, "float", osfl_float);
+        vm_register_native(vm, "str", osfl_str);
+        vm_register_native(vm, "bool", osfl_bool);
+        vm_register_native(vm, "open", osfl_open);
+        vm_register_native(vm, "read", osfl_read);
+        vm_register_native(vm, "write", osfl_write);
+        vm_register_native(vm, "close", osfl_close);
+        vm_register_native(vm, "exit", osfl_exit);
+        vm_register_native(vm, "time", osfl_time);
+        vm_register_native(vm, "type", osfl_type);
+        vm_register_native(vm, "range", osfl_range);
+        vm_register_native(vm, "enumerate", osfl_enumerate);
+
+        vm_run(vm);
+
+    cleanup:
+        if (vm) vm_destroy(vm);
+        if (bc) bytecode_destroy(bc);
+        if (root) ast_destroy(root);
+        if (parser) parser_destroy(parser);
+        if (lexer) lexer_destroy(lexer);
+        free(tokens);
         free(source);
-        return OSFL_ERROR_SYNTAX;
+        return status;
     }
-    semantic_cleanup(&sem_ctx);
-
-    /* 5) compile => Bytecode */
-    Bytecode* bc = compiler_compile_ast(root);
-    if (!bc) {
-        set_osfl_error(OSFL_ERROR_COMPILER, "Failed to compile AST", __FILE__, __LINE__, 0);
-        ast_destroy(root);
-        lexer_destroy(lexer);
+    __except(EXCEPTION_EXECUTE_HANDLER) {
+        if (vm) vm_destroy(vm);
+        if (bc) bytecode_destroy(bc);
+        if (root) ast_destroy(root);
+        if (parser) parser_destroy(parser);
+        if (lexer) lexer_destroy(lexer);
+        free(tokens);
         free(source);
-        return OSFL_ERROR_COMPILER;
+        return OSFL_ERROR_RUNTIME;
     }
-
-    /* 6) vm_create => vm_run */
-    VM* vm = vm_create(bc);
-
-    if (!vm) {
-        set_osfl_error(OSFL_ERROR_VM, "Failed to create VM", __FILE__, __LINE__, 0);
-        bytecode_destroy(bc);
-        ast_destroy(root);
-        lexer_destroy(lexer);
-        free(source);
-        return OSFL_ERROR_VM;
-    }
-
-    // Register native functions with the VM.
-    vm_register_native(vm, "print", osfl_print);
-    vm_register_native(vm, "split", osfl_split);
-    vm_register_native(vm, "join", osfl_join);
-    vm_register_native(vm, "substring", osfl_substring);
-    vm_register_native(vm, "replace", osfl_replace);
-    vm_register_native(vm, "to_upper", osfl_to_upper);
-    vm_register_native(vm, "to_lower", osfl_to_lower);
-    vm_register_native(vm, "len", osfl_len);
-    vm_register_native(vm, "append", osfl_append);
-    vm_register_native(vm, "pop", osfl_pop);
-    vm_register_native(vm, "insert", osfl_insert);
-    vm_register_native(vm, "remove", osfl_remove);
-    vm_register_native(vm, "sqrt", osfl_sqrt);
-    vm_register_native(vm, "pow", osfl_pow);
-    vm_register_native(vm, "sin", osfl_sin);
-    vm_register_native(vm, "cos", osfl_cos);
-    vm_register_native(vm, "tan", osfl_tan);
-    vm_register_native(vm, "log", osfl_log);
-    vm_register_native(vm, "abs", osfl_abs);
-    vm_register_native(vm, "int", osfl_int);
-    vm_register_native(vm, "float", osfl_float);
-    vm_register_native(vm, "str", osfl_str);
-    vm_register_native(vm, "bool", osfl_bool);
-    vm_register_native(vm, "open", osfl_open);
-    vm_register_native(vm, "read", osfl_read);
-    vm_register_native(vm, "write", osfl_write);
-    vm_register_native(vm, "close", osfl_close);
-    vm_register_native(vm, "exit", osfl_exit);
-    vm_register_native(vm, "time", osfl_time);
-    vm_register_native(vm, "type", osfl_type);
-    vm_register_native(vm, "range", osfl_range);
-    vm_register_native(vm, "enumerate", osfl_enumerate);
-        
-    vm_run(vm);
-    /* if you want to check for VM errors, you'd do so. We'll skip. */
-
-    /* Cleanup */
-    vm_destroy(vm);
-    bytecode_destroy(bc);
-    ast_destroy(root);
-    lexer_destroy(lexer);
-    free(source);
-
-    return OSFL_SUCCESS;
 }
 
 /**

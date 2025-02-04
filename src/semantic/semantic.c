@@ -75,7 +75,7 @@ static void analyze_node(AstNode* node, SemanticContext* ctx) {
                 break;
             case AST_NODE_CLASS_DECL:
                 /* You can do logic for class members, etc. */
-                scope_add_symbol(ctx->current_scope, node->as.class_decl.class_name, SYMBOL_CLASS);
+                scope_add_symbol(ctx->current_scope, node->as.class_decl.class_name, SYMBOL_CLASS, -1);
                 /* parse class members in a new scope or the same, up to you. */
                 break;
 
@@ -157,7 +157,7 @@ static void analyze_statement(AstNode* node, SemanticContext* ctx) {
 static void analyze_var_decl(AstNode* node, SemanticContext* ctx) {
     /* node->as.var_decl has var_name, initializer, is_const */
     if (!scope_add_symbol(ctx->current_scope, node->as.var_decl.var_name,
-                          node->as.var_decl.is_const ? SYMBOL_CONST : SYMBOL_VAR))
+                          node->as.var_decl.is_const ? SYMBOL_CONST : SYMBOL_VAR, -1))
     {
         fprintf(stderr, "Semantic error: duplicate variable '%s' in scope at %s:%d\n",
                 node->as.var_decl.var_name, node->loc.file, node->loc.line);
@@ -170,7 +170,7 @@ static void analyze_var_decl(AstNode* node, SemanticContext* ctx) {
 
 static void analyze_func_decl(AstNode* node, SemanticContext* ctx) {
     /* Add symbol to scope */
-    if (!scope_add_symbol(ctx->current_scope, node->as.func_decl.func_name, SYMBOL_FUNC)) {
+    if (!scope_add_symbol(ctx->current_scope, node->as.func_decl.func_name, SYMBOL_FUNC, -1)) {
         fprintf(stderr, "Semantic error: duplicate function '%s' at %s:%d\n",
                 node->as.func_decl.func_name, node->loc.file, node->loc.line);
         ctx->error_count++;
@@ -179,7 +179,7 @@ static void analyze_func_decl(AstNode* node, SemanticContext* ctx) {
     enter_scope(ctx);
     /* Add parameters as symbols */
     for (size_t i = 0; i < node->as.func_decl.param_count; i++) {
-        scope_add_symbol(ctx->current_scope, node->as.func_decl.param_names[i], SYMBOL_VAR);
+        scope_add_symbol(ctx->current_scope, node->as.func_decl.param_names[i], SYMBOL_VAR, -1);
     }
     analyze_node(node->as.func_decl.body, ctx);
     exit_scope(ctx);

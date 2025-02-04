@@ -100,3 +100,13 @@ LexerError lexer_get_error(const Lexer* lexer);
 void lexer_token_cleanup(Token* token);
 
 #endif /* OSFL_LEXER_H */
+
+/**
+ * @brief Peeks at the next character without consuming it
+ */
+char lexer_peek_char(const Lexer* lexer);
+
+/**
+ * @brief Advances to the next character
+ */
+void lexer_advance_char(Lexer* lexer);

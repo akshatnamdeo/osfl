@@ -1,7 +1,7 @@
+#include "symbol_table.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "../include/symbol_table.h"
 
 static char* st_strdup(const char* s) {
     if (!s) return NULL;
@@ -46,7 +46,7 @@ static void scope_grow_if_needed(Scope* scope) {
     }
 }
 
-bool scope_add_symbol(Scope* scope, const char* name, SymbolKind kind) {
+bool scope_add_symbol(Scope* scope, const char* name, SymbolKind kind, int reg) {
     /* Check if already exists in this scope only */
     for (size_t i = 0; i < scope->symbol_count; i++) {
         if (strcmp(scope->symbols[i].name, name) == 0) {
@@ -56,9 +56,9 @@ bool scope_add_symbol(Scope* scope, const char* name, SymbolKind kind) {
     }
     scope_grow_if_needed(scope);
     Symbol* s = &scope->symbols[scope->symbol_count++];
-    memset(s, 0, sizeof(Symbol));
     s->name = st_strdup(name);
     s->kind = kind;
+    s->reg = reg;   // Store the register number
     return true;
 }
 

@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdint.h>
 #include "../include/ast.h"
+#include "../include/vm_common.h"
+#include "../include/symbol_table.h"
 #include "bytecode.h"
 
 /* Forward declarations of local helper functions: */
@@ -11,6 +13,7 @@ static void compile_node(AstNode* node, Bytecode* bc);
 static int compile_expression(AstNode* expr, Bytecode* bc);
 static void add_function_entry(const char* name, int address);
 static int lookup_function_address(const char* name);
+static Scope* current_scope = NULL;
 
 /* A naive global for register allocation. */
 static int next_register = 0;
@@ -38,6 +41,24 @@ static void add_function_entry(const char* name, int address) {
     }
 }
 
+#define MAX_VARIABLES 64
+
+// A simple mapping from variable name to register number.
+// (For production code, you’d use a proper scoped symbol table.)
+static char* variable_names[MAX_VARIABLES];
+static int variable_count = 0;
+
+// Lookup a variable name in the current mapping.
+// Returns its register index if found; otherwise returns -1.
+static int lookup_variable_register(const char* name) {
+    for (int i = 0; i < variable_count; i++) {
+        if (strcmp(variable_names[i], name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int lookup_function_address(const char* name) {
     for (int i = 0; i < function_count; i++) {
         if (strcmp(function_table[i].name, name) == 0) {
@@ -45,6 +66,19 @@ static int lookup_function_address(const char* name) {
         }
     }
     return -1;
+}
+
+void dump_bytecode(const Bytecode* bc) {
+    fprintf(stderr, "---- Bytecode Dump (instruction count: %zu) ----\n", bc->instruction_count);
+    for (size_t i = 0; i < bc->instruction_count; i++) {
+        const Instruction* inst = &bc->instructions[i];
+        fprintf(stderr, "PC %zu: Opcode %d, op1=%d, op2=%d, op3=%d, op4=%d\n",
+                i, inst->opcode, inst->operand1, inst->operand2, inst->operand3, inst->operand4);
+    }
+    fprintf(stderr, "---- Constant Pool Dump (count: %zu) ----\n", bc->constant_pool.count);
+    for (size_t i = 0; i < bc->constant_pool.count; i++) {
+        fprintf(stderr, "CP[%zu]: '%s'\n", i, bc->constant_pool.strings[i]);
+    }
 }
 
 /**
@@ -63,6 +97,7 @@ Bytecode* compiler_compile_ast(AstNode* root) {
     compile_node(root, bc);
 
     bytecode_add_instruction(bc, OP_HALT, 0, 0, 0);
+    dump_bytecode(bc);
     return bc;
 }
 
@@ -73,6 +108,32 @@ static void compile_node(AstNode* node, Bytecode* bc) {
     if (!node) return;
 
     switch (node->type) {
+        case AST_NODE_FRAME: {
+            printf("DEBUG: Found frame: %s\n", node->as.frame_decl.frame_name);
+            // If this is the Main frame, handle it specially.
+            if (strcmp(node->as.frame_decl.frame_name, "Main") == 0) {
+                printf("DEBUG: Found Main frame\n");
+                // First compile the frame contents normally.
+                for (size_t i = 0; i < node->as.frame_decl.body_count; i++) {
+                    compile_node(node->as.frame_decl.body_statements[i], bc);
+                }
+                // After compiling the frame, look up the main function and call it.
+                int main_addr = lookup_function_address("main");
+                if (main_addr >= 0) {
+                    printf("DEBUG: Adding call to main() at address %d\n", main_addr);
+                    bytecode_add_instruction(bc, OP_CALL, main_addr, 0, 0);
+                    // Add HALT after main returns.
+                    bytecode_add_instruction(bc, OP_HALT, 0, 0, 0);
+                } else {
+                    printf("ERROR: main() function not found in Main frame\n");
+                }
+            } else {
+                // Regular frame compilation.
+                for (size_t i = 0; i < node->as.frame_decl.body_count; i++) {
+                    compile_node(node->as.frame_decl.body_statements[i], bc);
+                }
+            }
+        } break;
         case AST_NODE_BLOCK: {
             for (size_t i = 0; i < node->as.block.statement_count; i++) {
                 compile_node(node->as.block.statements[i], bc);
@@ -129,13 +190,38 @@ static void compile_node(AstNode* node, Bytecode* bc) {
             bytecode_add_instruction(bc, OP_RET, 0, 0, 0);
         } break;
         case AST_NODE_FUNC_DECL: {
+            printf("DEBUG: Compiling function node: %s\n", node->as.func_decl.func_name);
             int func_address = (int)bc->instruction_count;
             add_function_entry(node->as.func_decl.func_name, func_address);
-            // Optionally reset next_register for the function body.
+            
+            // Save the old scope.
+            Scope* old_scope = current_scope;
+            // Create a new scope for this function.
+            current_scope = scope_create(old_scope);
+            if (!current_scope) {
+                fprintf(stderr, "Failed to create function scope for '%s'.\n", node->as.func_decl.func_name);
+                exit(1);
+            }
+            printf("DEBUG: Setting up symbol table for function '%s' with %d parameter(s).\n",
+                   node->as.func_decl.func_name, node->as.func_decl.param_count);
+            // For each parameter, add it to the scope with register i.
+            for (int i = 0; i < (int)node->as.func_decl.param_count; i++) {
+                if (!scope_add_symbol(current_scope, node->as.func_decl.param_names[i], SYMBOL_VAR, i)) {
+                    fprintf(stderr, "Failed to add parameter '%s' to symbol table.\n", node->as.func_decl.param_names[i]);
+                } else {
+                    printf("DEBUG: Mapped parameter '%s' to register %d.\n", node->as.func_decl.param_names[i], i);
+                }
+            }
+            // Reserve registers for parameters.
             int saved_register = next_register;
-            next_register = 0;
+            next_register = node->as.func_decl.param_count;
+            
             compile_node(node->as.func_decl.body, bc);
             bytecode_add_instruction(bc, OP_RET, 0, 0, 0);
+            
+            // Clean up the function scope.
+            scope_destroy(current_scope);
+            current_scope = old_scope;
             next_register = saved_register;
         } break;
         case AST_NODE_CLASS_DECL: {
@@ -212,6 +298,16 @@ static int compile_expression(AstNode* expr, Bytecode* bc) {
                 case TOKEN_SLASH:
                     bytecode_add_instruction(bc, OP_DIV, dest_reg, left_reg, right_reg);
                     return dest_reg;
+                case TOKEN_EQ: {
+                    // New case: equality comparison
+                    bytecode_add_instruction(bc, OP_EQ, dest_reg, left_reg, right_reg);
+                    return dest_reg;
+                }
+                case TOKEN_NEQ: {
+                    // New case: inequality comparison
+                    bytecode_add_instruction(bc, OP_NEQ, dest_reg, left_reg, right_reg);
+                    return dest_reg;
+                }
                 default:
                     break;
             }
@@ -233,11 +329,19 @@ static int compile_expression(AstNode* expr, Bytecode* bc) {
         } break;
         case AST_EXPR_IDENTIFIER: {
             const char* id = expr->as.ident.name;
+            Symbol* sym = NULL;
+            if (current_scope != NULL) {
+                sym = scope_lookup(current_scope, id);
+            }
+            if (sym != NULL) {
+                // Found the symbol in the current scope; return its register.
+                return sym->reg;
+            }
+            // Otherwise, fall back on function lookup.
             int func_addr = lookup_function_address(id);
             if (func_addr < 0) {
-                fprintf(stderr, "[DEBUG] Identifier '%s' not found in function table; treating as native.\n", id);
-                // For a native function, return a dummy register.
-                return next_register++;
+                fprintf(stderr, "[DEBUG] Identifier '%s' not found in function table or symbol table; returning dummy register.\n", id);
+                return next_register++; // dummy; ideally, you would signal an error.
             }
             return func_addr;
         } break;
@@ -246,20 +350,35 @@ static int compile_expression(AstNode* expr, Bytecode* bc) {
                 const char* func_name = expr->as.call.callee->as.ident.name;
                 int func_addr = lookup_function_address(func_name);
                 if (func_addr < 0) {
-                    // This is a native function call.
+                    // Native call branch (unchanged)
+                    fprintf(stderr, "[DEBUG] Identifier '%s' not found in function table; treating as native.\n", func_name);
                     for (size_t i = 0; i < expr->as.call.arg_count; i++) {
                         compile_expression(expr->as.call.args[i], bc);
                     }
                     int base_reg = next_register - expr->as.call.arg_count;
                     int dest_reg = next_register++;
-                    // Use the extended instruction (with 4 operands) for native calls.
-                    bytecode_add_instruction_ex(bc, OP_CALL_NATIVE, dest_reg, (int)(intptr_t)func_name, (int)expr->as.call.arg_count, base_reg);
+                    int native_index = bytecode_add_constant_str(bc, func_name);
+                    fprintf(stderr, "[DEBUG] Interned native function '%s' at constant pool index %d.\n", func_name, native_index);
+                    bytecode_add_instruction_ex(bc, OP_CALL_NATIVE, dest_reg, native_index, (int)expr->as.call.arg_count, base_reg);
                     return dest_reg;
                 } else {
                     // Regular function call.
-                    for (size_t i = 0; i < expr->as.call.arg_count; i++) {
-                        compile_expression(expr->as.call.args[i], bc);
+                    int arg_count = (int)expr->as.call.arg_count;
+                    int* arg_regs = (int*)malloc(arg_count * sizeof(int));
+                    if (!arg_regs) {
+                        fprintf(stderr, "Failed to allocate memory for function call arguments.\n");
+                        exit(1);
                     }
+                    // Compile each argument; store its register.
+                    for (int i = 0; i < arg_count; i++) {
+                        arg_regs[i] = compile_expression(expr->as.call.args[i], bc);
+                    }
+                    // Now, move each argument into the callee's expected registers (0, 1, 2, …).
+                    for (int i = 0; i < arg_count; i++) {
+                        bytecode_add_instruction(bc, OP_MOVE, i, arg_regs[i], 0);
+                    }
+                    free(arg_regs);
+                    // Emit the call instruction.
                     bytecode_add_instruction(bc, OP_CALL, func_addr, 0, 0);
                     int ret_reg = next_register++;
                     return ret_reg;

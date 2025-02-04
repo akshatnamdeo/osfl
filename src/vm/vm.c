@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include "frame.h"
+#include "../include/vm_common.h"
+#include "../compiler/bytecode.h"
 
 /* forward declarations */
 static void vm_init_registers(VM* vm);
@@ -97,6 +99,7 @@ void vm_run(VM* vm) {
 }
 
 static void vm_execute_instruction(VM* vm, Instruction inst) {
+    fprintf(stderr, "[DEBUG] PC: %zu, Opcode: %d\n", vm->pc, inst.opcode);
     switch (inst.opcode) {
         case OP_NOP:
             vm->pc++;
@@ -105,9 +108,9 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
             int r = inst.operand1;
             int val = inst.operand2;
             if (r < 0 || r >= 16) {
-                fprintf(stderr, "Invalid register index %d\n", r);
-                vm->running = 0;
-                return;
+                    fprintf(stderr, "Invalid register index %d\n", r);
+                    vm->running = 0;
+                    return;
             }
             vm->registers[r].type = VAL_INT;
             vm->registers[r].as.int_val = val;
@@ -129,11 +132,14 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
         case OP_LOAD_CONST_STR: {
             int r = inst.operand1;
             if (r < 0 || r >= 16) {
-                fprintf(stderr, "Invalid register index %d for string constant\n", r);
-                vm->running = 0;
-                return;
+                    fprintf(stderr, "Invalid register index %d for string constant\n", r);
+                    vm->running = 0;
+                    return;
             }
             vm->registers[r].type = VAL_STRING;
+            // Here we assume the compiler loaded a raw pointer;
+            // with our new constant pool, you might want to change this
+            // so that OP_LOAD_CONST_STR gets its string from the constant pool.
             vm->registers[r].as.str_val = (char*)(intptr_t)inst.operand2;
             vm->registers[r].refcount = 0;
             vm->pc++;
@@ -193,6 +199,58 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
             vm->registers[rd].refcount = 0;
             vm->pc++;
         } break;
+        case OP_EQ: {
+            int dest = inst.operand1;
+            int rs1 = inst.operand2;
+            int rs2 = inst.operand3;
+            if (dest < 0 || dest >= 16 || rs1 < 0 || rs1 >= 16 || rs2 < 0 || rs2 >= 16) {
+                fprintf(stderr, "OP_EQ invalid register index.\n");
+                vm->running = 0;
+                return;
+            }
+            // Compare integer values (for simplicity; you may extend this to floats etc.)
+            if (vm->registers[rs1].type == VAL_INT && vm->registers[rs2].type == VAL_INT) {
+                vm->registers[dest].type = VAL_INT;
+                vm->registers[dest].as.int_val = (vm->registers[rs1].as.int_val == vm->registers[rs2].as.int_val) ? 1 : 0;
+                vm->registers[dest].refcount = 0;
+            } else {
+                fprintf(stderr, "OP_EQ type mismatch: expected ints.\n");
+                vm->running = 0;
+                return;
+            }
+            vm->pc++;
+        } break;
+        case OP_NEQ: {
+            int dest = inst.operand1;
+            int rs1 = inst.operand2;
+            int rs2 = inst.operand3;
+            if (dest < 0 || dest >= 16 || rs1 < 0 || rs1 >= 16 || rs2 < 0 || rs2 >= 16) {
+                fprintf(stderr, "OP_NEQ invalid register index.\n");
+                vm->running = 0;
+                return;
+            }
+            if (vm->registers[rs1].type == VAL_INT && vm->registers[rs2].type == VAL_INT) {
+                vm->registers[dest].type = VAL_INT;
+                vm->registers[dest].as.int_val = (vm->registers[rs1].as.int_val != vm->registers[rs2].as.int_val) ? 1 : 0;
+                vm->registers[dest].refcount = 0;
+            } else {
+                fprintf(stderr, "OP_NEQ type mismatch: expected ints.\n");
+                vm->running = 0;
+                return;
+            }
+            vm->pc++;
+        } break;
+        case OP_MOVE: {
+            int dest = inst.operand1;
+            int src = inst.operand2;
+            if (dest < 0 || dest >= 16 || src < 0 || src >= 16) {
+                fprintf(stderr, "OP_MOVE: invalid register index (dest=%d, src=%d).\n", dest, src);
+                vm->running = 0;
+                return;
+            }
+            vm->registers[dest] = vm->registers[src];
+            vm->pc++;
+        } break;
         case OP_JUMP:
             vm->pc = (size_t)inst.operand1;
             break;
@@ -227,10 +285,24 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
         } break;
         case OP_CALL_NATIVE: {
             int dest = inst.operand1;
-            const char* native_name = (const char*)(intptr_t)inst.operand2;
+            int cp_index = inst.operand2;  // constant pool index
+            fprintf(stderr, "[DEBUG] OP_CALL_NATIVE: About to look up constant pool index %d (pool count: %zu).\n",
+                    cp_index, vm->bytecode->constant_pool.count);
+            if (cp_index < 0 || cp_index >= (int)vm->bytecode->constant_pool.count) {
+                fprintf(stderr, "OP_CALL_NATIVE: constant pool index %d out of range\n", cp_index);
+                vm->running = 0;
+                return;
+            }
+            const char* native_name = vm->bytecode->constant_pool.strings[cp_index];
+            fprintf(stderr, "[DEBUG] OP_CALL_NATIVE: Retrieved native function name '%s' from constant pool index %d.\n",
+                    native_name, cp_index);
             int arg_count = inst.operand3;
             int base_reg = inst.operand4;
-            /* Dynamically allocate an array for the arguments */
+            if (!native_name) {
+                fprintf(stderr, "ERROR: NULL native function name\n");
+                vm->running = 0;
+                return;
+            }
             VMValue* args = (VMValue*)malloc(arg_count * sizeof(VMValue));
             if (!args) {
                 fprintf(stderr, "Failed to allocate memory for native call arguments.\n");
@@ -238,15 +310,32 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
                 return;
             }
             for (int i = 0; i < arg_count; i++) {
+                if (base_reg + i >= 16) {
+                    fprintf(stderr, "ERROR: Register index out of bounds in native call\n");
+                    free(args);
+                    vm->running = 0;
+                    return;
+                }
                 args[i] = vm->registers[base_reg + i];
             }
             VMValue result = vm_call_native(vm, native_name, arg_count, args);
             free(args);
-            vm->registers[dest] = result;
+            if (dest >= 0 && dest < 16) {
+                vm->registers[dest] = result;
+            } else {
+                fprintf(stderr, "ERROR: Invalid destination register in native call\n");
+                vm->running = 0;
+                return;
+            }
             vm->pc++;
         } break;
         case OP_RET:
-            vm_pop_frame(vm);
+            if (vm->call_stack_top == 0) {
+                // No caller frame exists (e.g. main returned).
+                vm->running = 0;
+            } else {
+                vm_pop_frame(vm);
+            }
             break;
         case OP_HALT:
             vm->running = 0;
@@ -327,7 +416,7 @@ static void vm_execute_instruction(VM* vm, Instruction inst) {
             }
             size_t cindex = vm_create_coroutine(vm);
             if (cindex != idx) {
-                // Simplistic handling.
+                /* Simplistic handling */
             }
             vm->pc++;
         } break;
@@ -488,13 +577,37 @@ void vm_coroutine_resume(VM* vm, size_t coro_index) {
 }
 
 bool vm_register_native(VM* vm, const char* name, VMValue(*func)(int, VMValue*)) {
-    if (vm->native_count >= 64) {
-        fprintf(stderr, "Native registry full.\n");
+    if (!vm) {
+        fprintf(stderr, "ERROR: NULL VM passed to vm_register_native\n");
         return false;
     }
+    
+    if (!name) {
+        fprintf(stderr, "ERROR: NULL name passed to vm_register_native\n");
+        return false;
+    }
+    
+    if (!func) {
+        fprintf(stderr, "ERROR: NULL function pointer passed to vm_register_native\n");
+        return false;
+    }
+
+    if (vm->native_count >= 64) {
+        fprintf(stderr, "ERROR: Native registry full (max 64 functions)\n");
+        return false;
+    }
+
+    for (size_t i = 0; i < vm->native_count; i++) {
+        if (strcmp(vm->native_registry[i].name, name) == 0) {
+            vm->native_registry[i].func = func;
+            return true;
+        }
+    }
+
     vm->native_registry[vm->native_count].name = name;
     vm->native_registry[vm->native_count].func = func;
     vm->native_count++;
+    
     return true;
 }
 

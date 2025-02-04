@@ -20,6 +20,7 @@ typedef enum {
 typedef struct Symbol {
     char* name;
     SymbolKind kind;
+    int reg;    // <-- New: the register number assigned to this symbol
     /* optionally store type info, or pointer to AST node, etc. */
 } Symbol;
 
@@ -30,7 +31,6 @@ typedef struct Scope {
     Symbol* symbols;
     size_t symbol_count;
     size_t symbol_capacity;
-
     struct Scope* parent; /* for nested scopes */
 } Scope;
 
@@ -48,7 +48,7 @@ void scope_destroy(Scope* scope);
  * Add a symbol to the current scope
  * @return true if success, false if symbol already exists
  */
-bool scope_add_symbol(Scope* scope, const char* name, SymbolKind kind);
+bool scope_add_symbol(Scope* scope, const char* name, SymbolKind kind, int reg);
 
 /**
  * Lookup a symbol in the current scope or any parent

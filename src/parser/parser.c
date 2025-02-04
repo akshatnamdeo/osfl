@@ -8,8 +8,8 @@
  * ------------------------------------------------------------------ */
 static Token parser_peek(Parser* parser);
 static Token parser_advance(Parser* parser);
-static int   parser_match(Parser* parser, TokenType type);
-static void  parser_consume(Parser* parser, TokenType type, const char* error_message);
+static int   parser_match(Parser* parser, OSFLTokenType type);
+static void  parser_consume(Parser* parser, OSFLTokenType type, const char* error_message);
 
 /* ------------------------------------------------------------------
  * FORWARD DECLARATIONS OF PARSE FUNCTIONS
@@ -31,6 +31,9 @@ static AstNode* parse_for_stmt(Parser* parser);
 static AstNode* parse_switch_stmt(Parser* parser);
 static AstNode* parse_try_catch_stmt(Parser* parser);
 static AstNode* parse_on_error_stmt(Parser* parser);
+
+/* New: Return statement parser */
+static AstNode* parse_return_stmt(Parser* parser);
 
 static AstNode* parse_expression_stmt(Parser* parser);
 
@@ -66,8 +69,8 @@ static AstNode* make_block_node(const SourceLocation* loc, AstNode** stmts, size
  */
 static AstNode* make_expr_literal(const Token* tok);
 static AstNode* make_expr_identifier(const Token* tok);
-static AstNode* make_expr_binary(TokenType op, AstNode* left, AstNode* right, const SourceLocation* loc);
-static AstNode* make_expr_unary(TokenType op, AstNode* expr, const SourceLocation* loc);
+static AstNode* make_expr_binary(OSFLTokenType op, AstNode* left, AstNode* right, const SourceLocation* loc);
+static AstNode* make_expr_unary(OSFLTokenType op, AstNode* expr, const SourceLocation* loc);
 
 /* ------------------------------------------------------------------
  * PARSER LIFECYCLE
@@ -92,9 +95,26 @@ AstNode* parser_parse(Parser* parser) {
 }
 
 /* ------------------------------------------------------------------
+ * WHITESPACE SKIPPING
+ * ------------------------------------------------------------------ */
+/* Skip whitespace tokens */
+static void skip_whitespace(Parser* parser) {
+    while (parser->current < parser->token_count) {
+        Token t = parser->tokens[parser->current];
+        if (t.type != TOKEN_NEWLINE && t.type != TOKEN_WHITESPACE) {
+            break;
+        }
+        parser->current++;
+    }
+}
+
+/* ------------------------------------------------------------------
  * TOKEN HELPERS
  * ------------------------------------------------------------------ */
 static Token parser_peek(Parser* parser) {
+    /* Skip any whitespace tokens */
+    skip_whitespace(parser);
+    
     if (parser->current < parser->token_count) {
         return parser->tokens[parser->current];
     }
@@ -114,7 +134,7 @@ static Token parser_advance(Parser* parser) {
     return eof;
 }
 
-static int parser_match(Parser* parser, TokenType type) {
+static int parser_match(Parser* parser, OSFLTokenType type) {
     if (parser_peek(parser).type == type) {
         parser_advance(parser);
         return 1;
@@ -122,7 +142,7 @@ static int parser_match(Parser* parser, TokenType type) {
     return 0;
 }
 
-static void parser_consume(Parser* parser, TokenType type, const char* error_message) {
+static void parser_consume(Parser* parser, OSFLTokenType type, const char* error_message) {
     if (!parser_match(parser, type)) {
         Token t = parser_peek(parser);
         fprintf(stderr, "Parse error at %s:%d: %s (got token '%s')\n",
@@ -188,7 +208,7 @@ static AstNode* parse_declaration(Parser* parser) {
         case TOKEN_CONST:
             return parse_var_decl(parser);
         default:
-            /* Not recognized as a decl => parse statement */
+            /* Not recognized as a declaration => parse statement */
             return parse_statement(parser);
     }
 }
@@ -199,14 +219,21 @@ static AstNode* parse_declaration(Parser* parser) {
 static AstNode* parse_statement(Parser* parser) {
     Token t = parser_peek(parser);
 
+    // First, if the token indicates a declaration, parse it as a declaration.
+    if (t.type == TOKEN_VAR || t.type == TOKEN_CONST) {
+        return parse_declaration(parser);
+    }
+
+    // Otherwise, dispatch based on the token.
     switch (t.type) {
-        case TOKEN_IF:    return parse_if_stmt(parser);
-        case TOKEN_WHILE: return parse_while_stmt(parser);
-        case TOKEN_FOR:   return parse_for_stmt(parser);
-        case TOKEN_SWITCH:return parse_switch_stmt(parser);
-        case TOKEN_TRY:   return parse_try_catch_stmt(parser);
+        case TOKEN_IF:       return parse_if_stmt(parser);
+        case TOKEN_WHILE:    return parse_while_stmt(parser);
+        case TOKEN_FOR:      return parse_for_stmt(parser);
+        case TOKEN_SWITCH:   return parse_switch_stmt(parser);
+        case TOKEN_TRY:      return parse_try_catch_stmt(parser);
         case TOKEN_ON_ERROR: return parse_on_error_stmt(parser);
-        case TOKEN_LBRACE:return parse_block(parser);
+        case TOKEN_RETURN:   return parse_return_stmt(parser);  // Return statement
+        case TOKEN_LBRACE:   return parse_block(parser);
         default:
             return parse_expression_stmt(parser);
     }
@@ -234,7 +261,7 @@ static AstNode* parse_block(Parser* parser) {
     return make_block_node(&brace.location, stmts, stmt_count);
 }
 
-/* parse_expression_stmt => parse expr, optional semicolon => AST_NODE_EXPR_STMT */
+/* parse_expression_stmt => parse expression, optional semicolon => AST_NODE_EXPR_STMT */
 static AstNode* parse_expression_stmt(Parser* parser) {
     AstNode* expr = parse_expression(parser);
     parser_match(parser, TOKEN_SEMICOLON);
@@ -242,30 +269,42 @@ static AstNode* parse_expression_stmt(Parser* parser) {
     AstNode* stmt = (AstNode*)calloc(1, sizeof(AstNode));
     stmt->type = AST_NODE_EXPR_STMT;
     stmt->loc = expr->loc;
-    /* We'll store the expression in the .unary.expr field for convenience (or define your own). */
+    /* For convenience, store the expression in the unary.expr field */
     stmt->as.unary.expr = expr;
     return stmt;
 }
 
 /* Frame => frame <id> { ... } => AST_NODE_FRAME */
 static AstNode* parse_frame(Parser* parser) {
+    fprintf(stderr, "DEBUG: Parsing frame\n");
     Token frameTok = parser_advance(parser); // consume 'frame'
-    Token idTok = parser_advance(parser);    // the name
+    fprintf(stderr, "DEBUG: Frame token consumed\n");
+    
+    Token idTok = parser_advance(parser);    // the frame name
+    fprintf(stderr, "DEBUG: Frame name token: %s\n", idTok.text);
+    
     parser_consume(parser, TOKEN_LBRACE, "Expected '{' after frame name.");
+    fprintf(stderr, "DEBUG: Opening brace found\n");
 
     AstNode** body = NULL;
     size_t body_count = 0;
     while (parser_peek(parser).type != TOKEN_RBRACE &&
            parser_peek(parser).type != TOKEN_EOF)
     {
-        AstNode* s = parse_statement(parser);
+        fprintf(stderr, "DEBUG: Parsing frame body declaration\n");
+        skip_whitespace(parser);  /* Skip newlines between declarations */
+        /* Use parse_declaration to allow nested function declarations */
+        AstNode* s = parse_declaration(parser);
         if (!s) {
+            fprintf(stderr, "DEBUG: Failed to parse declaration\n");
             parser_advance(parser);
             continue;
         }
         append_node(&body, &body_count, s);
+        fprintf(stderr, "DEBUG: Declaration added to frame body\n");
     }
     parser_consume(parser, TOKEN_RBRACE, "Expected '}' at end of frame.");
+    fprintf(stderr, "DEBUG: Frame parsing completed\n");
 
     AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
     node->type = AST_NODE_FRAME;
@@ -384,18 +423,18 @@ static AstNode* parse_import_decl(Parser* parser) {
     Token modTok = parser_advance(parser);
     parser_match(parser, TOKEN_SEMICOLON);
 
-    /* Let's just treat it as an expression-literal node with literal_type=TOKEN_IMPORT */
+    /* Treat as a literal node with literal_type=TOKEN_IMPORT */
     AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
-    node->type = AST_EXPR_LITERAL; 
+    node->type = AST_EXPR_LITERAL;
     node->loc = importTok.location;
-    node->as.literal.literal_type = TOKEN_IMPORT; 
+    node->as.literal.literal_type = TOKEN_IMPORT;
     node->as.literal.str_val = strdup(modTok.text);
     return node;
 }
 
 /* if (<cond>) <stmt> (else <stmt>) => AST_NODE_IF */
 static AstNode* parse_if_stmt(Parser* parser) {
-    Token ifTok = parser_advance(parser); 
+    Token ifTok = parser_advance(parser);
     parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'if'.");
     AstNode* cond = parse_expression(parser);
     parser_consume(parser, TOKEN_RPAREN, "Expected ')' after if condition.");
@@ -454,15 +493,14 @@ static AstNode* parse_for_stmt(Parser* parser) {
     return node;
 }
 
-/* switch (<expr>) { ... } => partial example => store as AST_EXPR_BINARY with op=TOKEN_SWITCH or your custom node */
+/* switch (<expr>) { ... } => stored as an AST_EXPR_BINARY node with op=TOKEN_SWITCH */
 static AstNode* parse_switch_stmt(Parser* parser) {
     Token swTok = parser_advance(parser);
     parser_consume(parser, TOKEN_LPAREN, "Expected '(' after 'switch'.");
     AstNode* expr = parse_expression(parser);
-    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after switch expr.");
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after switch expression.");
 
     parser_consume(parser, TOKEN_LBRACE, "Expected '{' after switch(...).");
-    /* parse cases (we won't show every detail here) */
     AstNode** cases = NULL;
     size_t case_count = 0;
     while (parser_peek(parser).type != TOKEN_RBRACE &&
@@ -477,11 +515,7 @@ static AstNode* parse_switch_stmt(Parser* parser) {
     }
     parser_consume(parser, TOKEN_RBRACE, "Expected '}' after switch.");
 
-    /* For demonstration, store them in a block node. */
     AstNode* caseBlock = make_block_node(&swTok.location, cases, case_count);
-
-    /* If you have a dedicated union field, use that. 
-       We'll do an AST_EXPR_BINARY with op=TOKEN_SWITCH, left=expr, right=caseBlock. */
     AstNode* switchNode = make_expr_binary(TOKEN_SWITCH, expr, caseBlock, &swTok.location);
     return switchNode;
 }
@@ -497,8 +531,6 @@ static AstNode* parse_try_catch_stmt(Parser* parser) {
     node->as.error_handler.handler_body = tryBlock; 
 
     if (parser_match(parser, TOKEN_CATCH)) {
-        /* parse catch statement => we might store it in node->next_sibling or a new union field. 
-           This example won't demonstrate everything. */
         AstNode* catchBlock = parse_statement(parser);
         node->next_sibling = catchBlock;
     }
@@ -524,7 +556,6 @@ static AstNode* parse_on_error_stmt(Parser* parser) {
     }
     parser_consume(parser, TOKEN_RBRACE, "Expected '}' after on_error block.");
 
-    /* store them in a block node */
     AstNode* block = make_block_node(&errTok.location, stmts, stmt_count);
 
     AstNode* errNode = (AstNode*)calloc(1, sizeof(AstNode));
@@ -532,6 +563,20 @@ static AstNode* parse_on_error_stmt(Parser* parser) {
     errNode->loc = errTok.location;
     errNode->as.error_handler.handler_body = block;
     return errNode;
+}
+
+/* ------------------------------------------------------------------
+ * NEW: Return Statement Parsing
+ * ------------------------------------------------------------------ */
+static AstNode* parse_return_stmt(Parser* parser) {
+    Token retTok = parser_advance(parser); // consume 'return'
+    AstNode* expr = parse_expression(parser);
+    parser_match(parser, TOKEN_SEMICOLON);
+    AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
+    node->type = AST_NODE_RETURN_STMT; // Ensure AST_NODE_RETURN_STMT is defined in your AST
+    node->loc = retTok.location;
+    node->as.ret_stmt.expr = expr;
+    return node;
 }
 
 /* ------------------------------------------------------------------
@@ -721,15 +766,36 @@ static AstNode* parse_unary(Parser* parser) {
     return parse_primary(parser);
 }
 
-/* parse_primary => docstring, regex, literal, identifier, interpolation, parentheses, etc. */
+static AstNode* parse_call(Parser* parser, AstNode* callee) {
+    // We have already consumed the '(' token.
+    AstNode** args = NULL;
+    size_t arg_count = 0;
+
+    // If the next token is not ')', parse one or more arguments.
+    if (parser_peek(parser).type != TOKEN_RPAREN) {
+        do {
+            AstNode* arg = parse_expression(parser);
+            append_node(&args, &arg_count, arg);
+        } while (parser_match(parser, TOKEN_COMMA));
+    }
+    parser_consume(parser, TOKEN_RPAREN, "Expected ')' after function call arguments.");
+
+    // Allocate and fill in the call node.
+    AstNode* call_node = (AstNode*)calloc(1, sizeof(AstNode));
+    call_node->type = AST_EXPR_CALL;
+    call_node->as.call.callee = callee;
+    call_node->as.call.args = args;
+    call_node->as.call.arg_count = arg_count;
+    return call_node;
+}
+
+/* parse_primary => handles literals, identifiers, interpolations, and parenthesized expressions */
 static AstNode* parse_primary(Parser* parser) {
     Token t = parser_peek(parser);
 
     switch (t.type) {
         case TOKEN_DOCSTRING: {
             parser_advance(parser);
-            /* If you want a distinct node type, we do AST_NODE_DOCSTRING. 
-               Or you treat it as a literal with literal_type=TOKEN_DOCSTRING. */
             AstNode* docNode = (AstNode*)calloc(1, sizeof(AstNode));
             docNode->type = AST_NODE_DOCSTRING;
             docNode->loc = t.location;
@@ -747,10 +813,9 @@ static AstNode* parse_primary(Parser* parser) {
             return regNode;
         }
         case TOKEN_INTERPOLATION_START: {
-            Token startTok = parser_advance(parser); 
+            Token startTok = parser_advance(parser);
             AstNode* innerExpr = parse_expression(parser);
             parser_consume(parser, TOKEN_INTERPOLATION_END, "Expected '}' after interpolation expression.");
-            /* We'll create an AST_EXPR_INTERPOLATION node. */
             AstNode* interp = (AstNode*)calloc(1, sizeof(AstNode));
             interp->type = AST_EXPR_INTERPOLATION;
             interp->loc = startTok.location;
@@ -769,16 +834,21 @@ static AstNode* parse_primary(Parser* parser) {
         case TOKEN_BOOL_TRUE:
         case TOKEN_BOOL_FALSE:
         {
-            /* treat as a literal expression */
             Token litTok = parser_advance(parser);
             return make_expr_literal(&litTok);
         }
         case TOKEN_IDENTIFIER: {
             Token idTok = parser_advance(parser);
-            return make_expr_identifier(&idTok);
+            AstNode* node = make_expr_identifier(&idTok);
+            // Check if the next token is a '(' indicating a function call.
+            while (parser_peek(parser).type == TOKEN_LPAREN) {
+                // Consume '(' and build a call node.
+                parser_advance(parser); // consume '('
+                node = parse_call(parser, node);
+            }
+            return node;
         }
         default:
-            /* fallback => error node or skip */
             fprintf(stderr, "Parse error at %s:%d: unexpected token '%s'\n",
                     t.location.file, (int)t.location.line, t.text);
             parser_advance(parser);
@@ -790,7 +860,6 @@ static AstNode* parse_primary(Parser* parser) {
  * Constructors for expressions
  * ------------------------------------------------------------------ */
 static AstNode* make_expr_literal(const Token* tok) {
-    /* build an AST_EXPR_LITERAL node */
     AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
     node->type = AST_EXPR_LITERAL;
     node->loc = tok->location;
@@ -812,7 +881,6 @@ static AstNode* make_expr_literal(const Token* tok) {
             node->as.literal.str_val = strdup(tok->text);
             break;
         default:
-            /* If docstring or regex appear here, handle them, or fallback */
             node->as.literal.str_val = strdup(tok->text);
             break;
     }
@@ -827,7 +895,7 @@ static AstNode* make_expr_identifier(const Token* tok) {
     return node;
 }
 
-static AstNode* make_expr_binary(TokenType op, AstNode* left, AstNode* right, const SourceLocation* loc) {
+static AstNode* make_expr_binary(OSFLTokenType op, AstNode* left, AstNode* right, const SourceLocation* loc) {
     AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
     node->type = AST_EXPR_BINARY;
     if (loc) node->loc = *loc;
@@ -837,7 +905,7 @@ static AstNode* make_expr_binary(TokenType op, AstNode* left, AstNode* right, co
     return node;
 }
 
-static AstNode* make_expr_unary(TokenType op, AstNode* expr, const SourceLocation* loc) {
+static AstNode* make_expr_unary(OSFLTokenType op, AstNode* expr, const SourceLocation* loc) {
     AstNode* node = (AstNode*)calloc(1, sizeof(AstNode));
     node->type = AST_EXPR_UNARY;
     if (loc) node->loc = *loc;

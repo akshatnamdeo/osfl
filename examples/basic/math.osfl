@@ -1,0 +1,10 @@
+frame Main {
+    func main() {
+        print("Square root of 16 is:", sqrt(16));
+        print("2 raised to the power 8 is:", pow(2, 8));
+        print("Sine of 0 is:", sin(0));
+        print("Cosine of 0 is:", cos(0));
+        print("Tangent of 0 is:", tan(0));
+        return 0;
+    }
+}

@@ -8,7 +8,7 @@
 #include "../include/source_location.h"
 
 /* Modified token creation to ensure proper memory management */
-static Token create_token(TokenType type, const char* text, unsigned int line, unsigned int column, const char* file) {
+static Token create_token(OSFLTokenType type, const char* text, unsigned int line, unsigned int column, const char* file) {
     printf("Creating token: type=%d, text='%s'\n", type, text);
     fflush(stdout);
     

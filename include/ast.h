@@ -52,7 +52,7 @@ typedef enum {
  * For a literal expression: we store the token type + union of numeric/string/bool data.
  */
 typedef struct {
-    TokenType literal_type;  /* e.g. TOKEN_INTEGER, TOKEN_STRING, TOKEN_BOOL_TRUE, etc. */
+    OSFLTokenType literal_type;  /* e.g. TOKEN_INTEGER, TOKEN_STRING, TOKEN_BOOL_TRUE, etc. */
     union {
         int64_t i64_val;
         double  f64_val;
@@ -65,7 +65,7 @@ typedef struct {
  * For a binary operation expression: left op right
  */
 typedef struct {
-    TokenType op;       /* e.g. TOKEN_PLUS, TOKEN_MINUS, etc. */
+    OSFLTokenType op;       /* e.g. TOKEN_PLUS, TOKEN_MINUS, etc. */
     struct AstNode* left;
     struct AstNode* right;
 } AstBinaryData;
@@ -74,7 +74,7 @@ typedef struct {
  * For a unary operation expression: op expr
  */
 typedef struct {
-    TokenType op;  /* e.g. TOKEN_MINUS, TOKEN_NOT, etc. */
+    OSFLTokenType op;  /* e.g. TOKEN_MINUS, TOKEN_NOT, etc. */
     struct AstNode* expr;
 } AstUnaryData;
 

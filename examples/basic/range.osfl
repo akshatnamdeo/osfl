@@ -1,0 +1,8 @@
+frame Main {
+    func main() {
+        // Create a list from 1 (inclusive) to 10 (exclusive)
+        var numbers = range(1, 10);
+        print("Numbers:", numbers);
+        return 0;
+    }
+}

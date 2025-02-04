@@ -146,7 +146,7 @@ static Lexer* create_test_lexer(const char* input) {
  * @param expected_line The expected line number.
  * @param expected_column The expected column number.
  */
-static void verify_token(Token token, TokenType expected_type, const char* expected_text, uint32_t expected_line, uint32_t expected_column) {
+static void verify_token(Token token, OSFLTokenType expected_type, const char* expected_text, uint32_t expected_line, uint32_t expected_column) {
     TEST_ASSERT_EQUAL(expected_type, token.type);
     TEST_ASSERT_STR_EQUAL(expected_text, token.text);
     TEST_ASSERT_EQUAL_UINT32(expected_line, token.location.line);
@@ -181,7 +181,7 @@ static void test_single_char_tokens() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_PLUS,
         TOKEN_MINUS,
         TOKEN_STAR,
@@ -211,7 +211,7 @@ static void test_single_char_tokens() {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 1, 1
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -233,7 +233,7 @@ static void test_multi_char_operators() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_INCREMENT,
         TOKEN_DECREMENT,
         TOKEN_EQ,
@@ -262,7 +262,7 @@ static void test_multi_char_operators() {
         1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40, 43, 46, 48
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -284,7 +284,7 @@ static void test_keywords() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_FRAME,
         TOKEN_IN,
         TOKEN_VAR,
@@ -331,7 +331,7 @@ static void test_keywords() {
         85   /* EOF */
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -350,7 +350,7 @@ static void test_identifiers() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_IDENTIFIER,
         TOKEN_IDENTIFIER,
         TOKEN_IDENTIFIER,
@@ -377,7 +377,7 @@ static void test_identifiers() {
         49  // EOF position should be one past the last character
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -403,7 +403,7 @@ static void test_integer_literals() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_INTEGER,
         TOKEN_INTEGER,
         TOKEN_MINUS,
@@ -432,7 +432,7 @@ static void test_integer_literals() {
         16  // EOF position after the last character
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -453,7 +453,7 @@ static void test_float_literals() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_FLOAT,
         TOKEN_FLOAT,
         TOKEN_MINUS,
@@ -482,7 +482,7 @@ static void test_float_literals() {
         30   // EOF position after the last character
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -504,7 +504,7 @@ static void test_string_literals() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_STRING,
         TOKEN_STRING,
         TOKEN_STRING,
@@ -529,7 +529,7 @@ static void test_string_literals() {
         53   // EOF position after the last character
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -554,7 +554,7 @@ static void test_boolean_literals() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_BOOL_TRUE,
         TOKEN_BOOL_FALSE,
         TOKEN_IDENTIFIER,  // TRUE
@@ -574,7 +574,7 @@ static void test_boolean_literals() {
         1,6,12,17,22
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);
@@ -600,7 +600,7 @@ static void test_invalid_characters() {
     Lexer* lexer = create_test_lexer(input);
     Token token;
 
-    TokenType expected_types[] = {
+    OSFLTokenType expected_types[] = {
         TOKEN_ERROR, TOKEN_ERROR, TOKEN_ERROR, TOKEN_ERROR, TOKEN_ERROR, TOKEN_ERROR,
         TOKEN_EOF
     };
@@ -617,7 +617,7 @@ static void test_invalid_characters() {
         1,3,5,7,9,11,12
     };
 
-    size_t num_tokens = sizeof(expected_types) / sizeof(TokenType);
+    size_t num_tokens = sizeof(expected_types) / sizeof(OSFLTokenType);
 
     for (size_t i = 0; i < num_tokens; i++) {
         token = lexer_next_token(lexer);

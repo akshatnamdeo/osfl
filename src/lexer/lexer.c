@@ -37,11 +37,11 @@
 
 /* 4 spaces for indentation throughout the file */
 #ifndef TRUE
-#define TRUE 1
+    #define TRUE 1
 #endif
 
 #ifndef FALSE
-#define FALSE 0
+    #define FALSE 0
 #endif
 
 /* ----------------------------------------------------------
@@ -90,9 +90,10 @@ static Token scan_regex_literal(Lexer* lexer, Token token);
 static Token scan_operator_or_regex(Lexer* lexer);
 static Token scan_token_dispatch(Lexer* lexer, Token token);
 
+static SourceLocation lexer_current_location(Lexer* lexer);
 static void skip_whitespace(Lexer* lexer);
 static void skip_comments(Lexer* lexer);
-static Token handle_multi_char_operator(Lexer* lexer, TokenType type, const char* text);
+static Token handle_multi_char_operator(Lexer* lexer, OSFLTokenType type, const char* text);
 static void safe_append_char(Lexer* lexer, char c, size_t* length);
 
 static int  is_digit_10(char c);
@@ -128,7 +129,7 @@ Keyword Table
 ---------------------------------------------------------- */
 typedef struct {
     const char* keyword;
-    TokenType   type;
+    OSFLTokenType   type;
 } KeywordEntry;
 
 static const KeywordEntry KEYWORDS[] = {
@@ -246,6 +247,30 @@ void lexer_reset(Lexer* lexer, const char* new_source)
 /* ----------------------------------------------------------
 Character Management
 ---------------------------------------------------------- */
+
+char lexer_peek_char(const Lexer* lexer) {
+    if (lexer->position < lexer->length) {
+        return lexer->source[lexer->position];
+    }
+    return '\0';
+}
+
+void lexer_advance_char(Lexer* lexer) {
+    if (!is_at_end(lexer)) {
+        if (lexer->current == '\n') {
+            lexer->line++;
+            lexer->column = 1;
+        } else {
+            lexer->column++;
+        }
+        lexer->position++;
+        lexer->current = lexer_peek_char(lexer);
+        lexer->peek = (lexer->position + 1 < lexer->length) 
+            ? lexer->source[lexer->position + 1] 
+            : '\0';
+    }
+}
+
 static void advance(Lexer* lexer)
 {
     if (!is_at_end(lexer)) {
@@ -275,10 +300,46 @@ static int is_at_end(Lexer* lexer)
 /* ----------------------------------------------------------
 Public Token Retrieval
 ---------------------------------------------------------- */
-Token lexer_next_token(Lexer* lexer)
+
+SourceLocation lexer_current_location(Lexer* lexer)
 {
-    clear_error(lexer);
-    return lexer_next_token_internal(lexer);
+    SourceLocation loc;
+    loc.line = (unsigned int)lexer->line;
+    loc.column = (unsigned int)lexer->column;
+    loc.file = lexer->config.file_name;
+    return loc;
+}
+
+Token lexer_next_token(Lexer* lexer) {
+    fprintf(stderr, "DEBUG: Getting next token at position %zu\n", lexer->position);
+    
+    // Skip whitespace manually using character functions
+    while (!is_at_end(lexer) && isspace(lexer_peek_char(lexer))) {
+        char c = lexer_peek_char(lexer);
+        if (c == '\n' && lexer->config.track_line_endings) {
+            Token t;
+            memset(&t, 0, sizeof(t));
+            t.type = TOKEN_NEWLINE;
+            t.location = (SourceLocation){
+                .line = (uint32_t)lexer->line,
+                .column = (uint32_t)lexer->column,
+                .file = lexer->config.file_name
+            };
+            strcpy_s(t.text, sizeof(t.text), "\\n");
+            lexer_advance_char(lexer);
+            fprintf(stderr, "DEBUG: Found newline token\n");
+            return t;
+        }
+        lexer_advance_char(lexer);
+    }
+    
+    fprintf(stderr, "DEBUG: Next non-whitespace char: '%c'\n", lexer_peek_char(lexer));
+    
+    // Proceed with the standard token creation
+    Token result = lexer_next_token_internal(lexer);
+    fprintf(stderr, "DEBUG: Created token type=%d, text='%s'\n", 
+            result.type, result.text ? result.text : "NULL");
+    return result;
 }
 
 Token lexer_peek_token(Lexer* lexer)
@@ -389,10 +450,10 @@ Scan: Docstring (Triple Quoted) => TOKEN_DOCSTRING
 ---------------------------------------------------------- */
 static Token scan_docstring(Lexer* lexer, Token token)
 {
-    // Skip the initial """
-    advance(lexer); // first quote
-    advance(lexer); // second quote
-    advance(lexer); // third quote
+    /* Skip the initial """ */
+    advance(lexer);
+    advance(lexer);
+    advance(lexer);
 
     token.type = TOKEN_DOCSTRING;
 
@@ -400,13 +461,11 @@ static Token scan_docstring(Lexer* lexer, Token token)
     memset(lexer->string_buffer, 0, LEXER_MAX_STRING_LENGTH);
 
     while (!is_at_end(lexer)) {
-        /* Check if we see a closing """ */
         if (lexer->current == '"' &&
             lexer->peek == '"' &&
             (lexer->position + 2 < lexer->length) &&
             lexer->source[lexer->position + 2] == '"')
         {
-            /* consume the three quotes */
             advance(lexer);
             advance(lexer);
             advance(lexer);
@@ -421,15 +480,11 @@ static Token scan_docstring(Lexer* lexer, Token token)
             return token;
         }
 
-        /* Append current character to string buffer */
         lexer->string_buffer[length++] = lexer->current;
         lexer->string_buffer[length] = '\0';
         advance(lexer);
     }
 
-    /* If we reached the end without closing quotes => error? (Your choice) */
-
-    /* Copy to token text and store it as string_value */
     strncpy_s(token.text, sizeof(token.text),
               lexer->string_buffer, sizeof(token.text) - 1);
     token.value.string_value.data = _strdup(lexer->string_buffer);
@@ -444,16 +499,13 @@ Scan: String with Interpolation => TOKEN_STRING
 static Token scan_string(Lexer* lexer, Token token)
 {
     token.type = TOKEN_STRING;
-    /* Skip the opening quote */
     advance(lexer);
 
     size_t length = 0;
     memset(lexer->string_buffer, 0, LEXER_MAX_STRING_LENGTH);
 
     while (!is_at_end(lexer) && lexer->current != '"') {
-        /* Look for interpolation: "${" */
         if (lexer->current == '$' && lexer->peek == '{') {
-            /* If we have accumulated characters so far, return that as a string token first. */
             if (length > 0) {
                 strncpy_s(token.text, sizeof(token.text),
                           lexer->string_buffer, sizeof(token.text) - 1);
@@ -461,8 +513,6 @@ static Token scan_string(Lexer* lexer, Token token)
                 token.value.string_value.length = length;
                 return token;
             }
-            /* Otherwise produce an empty string token or skip directly. */
-            /* Let’s produce the interpolation token now. */
             Token interp;
             memset(&interp, 0, sizeof(interp));
             interp.type = TOKEN_INTERPOLATION_START;
@@ -470,15 +520,11 @@ static Token scan_string(Lexer* lexer, Token token)
             interp.location.column = lexer->column;
             interp.location.file = lexer->config.file_name;
             strcpy_s(interp.text, sizeof(interp.text), "${");
-
-            /* Advance past '$' and '{' */
             advance(lexer);
             advance(lexer);
-
             return interp;
         }
 
-        /* Handle escape sequences: \n, \t, \", \\ */
         if (lexer->current == '\\') {
             advance(lexer);
             if (is_at_end(lexer)) {
@@ -490,7 +536,7 @@ static Token scan_string(Lexer* lexer, Token token)
             switch (lexer->current) {
                 case 'n': safe_append_char(lexer, '\n', &length); break;
                 case 't': safe_append_char(lexer, '\t', &length); break;
-                case '\\':safe_append_char(lexer, '\\', &length); break;
+                case '\\': safe_append_char(lexer, '\\', &length); break;
                 case '"': safe_append_char(lexer, '"', &length); break;
                 default:
                     set_error(lexer, LEXER_ERROR_INVALID_ESCAPE,
@@ -504,7 +550,6 @@ static Token scan_string(Lexer* lexer, Token token)
         advance(lexer);
     }
 
-    /* If we ended because of EOF => error */
     if (is_at_end(lexer)) {
         set_error(lexer, LEXER_ERROR_UNTERMINATED_STRING,
                   "Unterminated string literal before EOF");
@@ -512,10 +557,8 @@ static Token scan_string(Lexer* lexer, Token token)
         return token;
     }
 
-    /* Found the closing quote => consume it */
     advance(lexer);
 
-    /* Now store the final string in token. */
     strncpy_s(token.text, sizeof(token.text),
               lexer->string_buffer, sizeof(token.text) - 1);
     token.value.string_value.data = _strdup(lexer->string_buffer);
@@ -530,8 +573,6 @@ Scan: Regex Literal => TOKEN_REGEX
 static Token scan_regex_literal(Lexer* lexer, Token token)
 {
     token.type = TOKEN_REGEX;
-
-    /* Advance past the initial '/' */
     advance(lexer);
 
     size_t length = 0;
@@ -539,7 +580,6 @@ static Token scan_regex_literal(Lexer* lexer, Token token)
 
     while (!is_at_end(lexer)) {
         if (lexer->current == '\\') {
-            /* Escape sequence in a regex: store the slash plus the next char */
             safe_append_char(lexer, lexer->current, &length);
             advance(lexer);
             if (!is_at_end(lexer)) {
@@ -547,7 +587,6 @@ static Token scan_regex_literal(Lexer* lexer, Token token)
                 advance(lexer);
             }
         } else if (lexer->current == '/') {
-            /* End of regex */
             advance(lexer);
             break;
         } else {
@@ -556,11 +595,8 @@ static Token scan_regex_literal(Lexer* lexer, Token token)
         }
     }
 
-    /* Copy text into token */
     strncpy_s(token.text, sizeof(token.text),
               lexer->string_buffer, sizeof(token.text) - 1);
-
-    /* Store as string_value */
     token.value.string_value.data = _strdup(lexer->string_buffer);
     token.value.string_value.length = length;
 
@@ -572,26 +608,16 @@ Scan: Number with multiple formats
 ---------------------------------------------------------- */
 static Token scan_number(Lexer* lexer, Token token)
 {
-    // This handles:
-    //   - 0xNN for hex
-    //   - 0bNN for binary
-    //   - 0oNN for octal
-    //   - decimal with underscores
-    //   - scientific notation
-    // We store everything in a small buffer, then parse.
-
     char buffer[128];
     memset(buffer, 0, sizeof(buffer));
     size_t length = 0;
     int is_float = 0;
 
-    // If we see "0x", "0b", or "0o"
     if (lexer->current == '0') {
         if (lexer->peek == 'x' || lexer->peek == 'X') {
-            // hex
-            buffer[length++] = lexer->current; // '0'
+            buffer[length++] = lexer->current;
             advance(lexer);
-            buffer[length++] = lexer->current; // 'x'
+            buffer[length++] = lexer->current;
             advance(lexer);
 
             while (!is_at_end(lexer) && is_hex_digit(lexer->current)) {
@@ -608,10 +634,9 @@ static Token scan_number(Lexer* lexer, Token token)
             return token;
         }
         else if (lexer->peek == 'b' || lexer->peek == 'B') {
-            // binary
-            buffer[length++] = lexer->current; // '0'
+            buffer[length++] = lexer->current;
             advance(lexer);
-            buffer[length++] = lexer->current; // 'b'
+            buffer[length++] = lexer->current;
             advance(lexer);
 
             while (!is_at_end(lexer) &&
@@ -631,10 +656,9 @@ static Token scan_number(Lexer* lexer, Token token)
             return token;
         }
         else if (lexer->peek == 'o' || lexer->peek == 'O') {
-            // octal
-            buffer[length++] = lexer->current; // '0'
+            buffer[length++] = lexer->current;
             advance(lexer);
-            buffer[length++] = lexer->current; // 'o'
+            buffer[length++] = lexer->current;
             advance(lexer);
 
             while (!is_at_end(lexer) &&
@@ -655,17 +679,14 @@ static Token scan_number(Lexer* lexer, Token token)
         }
     }
 
-    // Otherwise, parse decimal or float
     int seen_dot = 0;
     while (!is_at_end(lexer)) {
         if (lexer->current == '_') {
-            // skip underscores
             advance(lexer);
             continue;
         }
         if (lexer->current == '.') {
             if (seen_dot) {
-                // second dot => break
                 break;
             }
             seen_dot = 1;
@@ -678,13 +699,10 @@ static Token scan_number(Lexer* lexer, Token token)
             advance(lexer);
         }
         else {
-            // possibly exponent (e/E)
             if ((lexer->current == 'e' || lexer->current == 'E') && is_digit_10(lexer->peek)) {
                 is_float = 1;
                 buffer[length++] = lexer->current;
                 advance(lexer);
-
-                // optional sign
                 if (lexer->current == '+' || lexer->current == '-') {
                     buffer[length++] = lexer->current;
                     advance(lexer);
@@ -695,7 +713,6 @@ static Token scan_number(Lexer* lexer, Token token)
                 }
             } 
             else {
-                // done
                 break;
             }
         }
@@ -737,7 +754,6 @@ static Token scan_identifier(Lexer* lexer, Token token)
     token.type = TOKEN_IDENTIFIER;
     strcpy_s(token.text, sizeof(token.text), buffer);
 
-    /* Check if the identifier is a keyword. */
     for (int i = 0; KEYWORDS[i].keyword != NULL; i++) {
         if (strcmp(buffer, KEYWORDS[i].keyword) == 0) {
             token.type = KEYWORDS[i].type;
@@ -745,7 +761,6 @@ static Token scan_identifier(Lexer* lexer, Token token)
         }
     }
 
-    /* Also check for 'true' / 'false' => bool literals */
     if (strcmp(buffer, "true") == 0) {
         token.type = TOKEN_BOOL_TRUE;
         token.value.bool_value = true;
@@ -774,9 +789,7 @@ static Token scan_operator_or_regex(Lexer* lexer)
     token.location.column = lexer->column;
     token.location.file = lexer->config.file_name;
 
-    // Multi-char operators first
     if (c == '*' && p == '*') {
-        // exponent: **
         return handle_multi_char_operator(lexer, TOKEN_POW, "**");
     }
     if (c == '+' && p == '+') return handle_multi_char_operator(lexer, TOKEN_INCREMENT, "++");
@@ -796,7 +809,6 @@ static Token scan_operator_or_regex(Lexer* lexer)
     if (c == '=' && p == '>') return handle_multi_char_operator(lexer, TOKEN_DOUBLE_ARROW, "=>");
     if (c == ':' && p == ':') return handle_multi_char_operator(lexer, TOKEN_DOUBLE_COLON, "::");
 
-    // Single-char operators/characters
     switch (c) {
         case '~': token.type = TOKEN_BIT_NOT;       strcpy_s(token.text, sizeof(token.text), "~");  break;
         case '^': token.type = TOKEN_BIT_XOR;       strcpy_s(token.text, sizeof(token.text), "^");  break;
@@ -804,7 +816,6 @@ static Token scan_operator_or_regex(Lexer* lexer)
         case '|': token.type = TOKEN_BIT_OR;        strcpy_s(token.text, sizeof(token.text), "|");  break;
         case '[': token.type = TOKEN_LBRACKET;      strcpy_s(token.text, sizeof(token.text), "[");  break;
         case ']': token.type = TOKEN_RBRACKET;      strcpy_s(token.text, sizeof(token.text), "]");  break;
-
         case '+': token.type = TOKEN_PLUS;          strcpy_s(token.text, sizeof(token.text), "+");  break;
         case '-': token.type = TOKEN_MINUS;         strcpy_s(token.text, sizeof(token.text), "-");  break;
         case '*': token.type = TOKEN_STAR;          strcpy_s(token.text, sizeof(token.text), "*");  break;
@@ -839,7 +850,7 @@ static Token scan_operator_or_regex(Lexer* lexer)
 /* ----------------------------------------------------------
 Helper: Handle multi-char operator
 ---------------------------------------------------------- */
-static Token handle_multi_char_operator(Lexer* lexer, TokenType type, const char* text)
+static Token handle_multi_char_operator(Lexer* lexer, OSFLTokenType type, const char* text)
 {
     Token token;
     memset(&token, 0, sizeof(Token));
@@ -902,21 +913,16 @@ static void skip_whitespace(Lexer* lexer)
 static void skip_comments(Lexer* lexer)
 {
     while (!is_at_end(lexer)) {
-        // Single-line comment: "//"
         if (lexer->current == '/' && lexer->peek == '/') {
             if (lexer->config.include_comments) {
-                /* If you want to produce TOKEN_COMMENT, you'd do that here. */
                 return; 
             }
-            /* Otherwise, skip until we hit newline or EOF. */
             while (!is_at_end(lexer) && lexer->current != '\n') {
                 advance(lexer);
             }
         }
-        // Multi-line comment: "/*"
         else if (lexer->current == '/' && lexer->peek == '*') {
             if (lexer->config.include_comments) {
-                /* Optionally produce a TOKEN_COMMENT or skip. */
                 return;
             }
             advance(lexer);
@@ -938,7 +944,6 @@ static void skip_comments(Lexer* lexer)
             }
         }
         else {
-            // Not a comment => stop
             return;
         }
         skip_whitespace(lexer);
@@ -963,7 +968,6 @@ Token Cleanup
 ---------------------------------------------------------- */
 void lexer_token_cleanup(Token* token)
 {
-    /* Free any allocated string memory from string_value.data */
     if ((token->type == TOKEN_STRING ||
          token->type == TOKEN_DOCSTRING ||
          token->type == TOKEN_REGEX) &&
@@ -997,8 +1001,7 @@ static int is_alpha_ascii(char c)
 
 /**
  * Simple approach to allow ASCII letters or underscore or any high-bit char >=128
- * for a Unicode-friendly start character. Real-world usage might decode UTF-8 
- * properly to check if it's a letter category, but this is a minimal approach.
+ * for a Unicode-friendly start character.
  */
 static int is_valid_identifier_start(char c)
 {

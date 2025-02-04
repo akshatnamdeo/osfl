@@ -1,0 +1,10 @@
+frame Main {
+    func main() {
+        var s = "hello world osfl";
+        var parts = split(s, " ");
+        print("Split parts:", parts);
+        var joined = join(parts, "-");
+        print("Joined string:", joined);
+        return 0;
+    }
+}

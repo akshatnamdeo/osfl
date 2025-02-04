@@ -1,66 +1,28 @@
+// src/vm/vm.h
 #ifndef VM_H
 #define VM_H
 
-#include <stddef.h>
 #include <stdbool.h>
-#include "frame.h"
-#include "memory.h"
+#include "../../include/vm_common.h"
 #include "../../include/value.h"
+#include "../compiler/bytecode.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Forward declarations
+typedef struct VM VM;
+typedef struct Frame Frame;
 
 /**
-    VMOpcode: all operation codes recognized by the VM.
-*/
-typedef enum {
-    OP_NOP,
-    OP_LOAD_CONST,          // load integer constant
-    OP_LOAD_CONST_FLOAT,    // load float constant
-    OP_LOAD_CONST_STR,      // load string constant
-    OP_ADD,
-    OP_SUB,
-    OP_MUL,
-    OP_DIV,
-    OP_JUMP,
-    OP_JUMP_IF_ZERO,
-    OP_CALL,                // regular (bytecode) function call
-    OP_CALL_NATIVE,         // native function call (extended instruction)
-    OP_RET,
-    OP_HALT,
-    OP_NEWOBJ,
-    OP_SETPROP,
-    OP_GETPROP,
-    OP_CORO_INIT,
-    OP_CORO_YIELD,
-    OP_CORO_RESUME
-} VMOpcode;
-
-/* An instruction for the VM with 4 operands */
-typedef struct {
-    VMOpcode opcode;
-    int operand1;
-    int operand2;
-    int operand3;
-    int operand4;  // extra operand for extended instructions (e.g. native calls)
-} Instruction;
-
-/* Bytecode: an array of instructions plus a count. */
-typedef struct {
-    Instruction* instructions;
-    size_t instruction_count;
-} Bytecode;
-
-/**
-    Use the unified Value type as our VMValue.
-*/
-typedef Value VMValue;
-
-/**
-    A minimal “object” structure for the new object model.
+    A minimal "object" structure for the new object model.
 */
 typedef struct VMObject {
     int refcount;
     struct {
         char** keys;
-        VMValue* values;
+        Value* values;  // Using Value instead of VMValue
         size_t count;
         size_t capacity;
     } fields;
@@ -73,7 +35,7 @@ typedef struct Coro {
     bool active;
     size_t pc;
     Frame* frame;
-    VMValue registers[16];
+    Value registers[16];  // Using Value instead of VMValue
 } Coro;
 
 #define MAX_COROUTINES 64
@@ -84,7 +46,7 @@ typedef struct Coro {
 typedef struct VM {
     Bytecode* bytecode;
     size_t pc;
-    VMValue registers[16];
+    Value registers[16];  // Using Value instead of VMValue
     int running;
     Frame* call_stack[1024];
     size_t call_stack_top;
@@ -96,7 +58,7 @@ typedef struct VM {
     size_t current_coro;
     struct {
         const char* name;
-        VMValue (*func)(int arg_count, VMValue* args);
+        Value (*func)(int arg_count, Value* args);  // Using Value instead of VMValue
     } native_registry[64];
     size_t native_count;
     void* jit_context;
@@ -107,21 +69,25 @@ VM* vm_create(Bytecode* bytecode);
 void vm_destroy(VM* vm);
 void vm_run(VM* vm);
 void vm_dump_registers(const VM* vm);
-VMValue vm_get_register_value(const VM* vm, int reg_index);
+Value vm_get_register_value(const VM* vm, int reg_index);  // Using Value instead of VMValue
 void vm_retain_object(VM* vm, VMObject* obj);
 void vm_release_object(VM* vm, VMObject* obj);
 void vm_gc_collect(VM* vm);
 VMObject* vm_create_object(VM* vm);
-bool vm_set_property(VM* vm, VMObject* obj, const char* key, VMValue val);
-VMValue vm_get_property(VM* vm, VMObject* obj, const char* key);
+bool vm_set_property(VM* vm, VMObject* obj, const char* key, Value val);  // Using Value instead of VMValue
+Value vm_get_property(VM* vm, VMObject* obj, const char* key);  // Using Value instead of VMValue
 size_t vm_create_coroutine(VM* vm);
 void vm_coroutine_yield(VM* vm);
 void vm_coroutine_resume(VM* vm, size_t coro_index);
-bool vm_register_native(VM* vm, const char* name, VMValue(*func)(int, VMValue*));
-VMValue vm_call_native(VM* vm, const char* name, int arg_count, VMValue* args);
+bool vm_register_native(VM* vm, const char* name, Value(*func)(int, Value*));  // Using Value instead of VMValue
+Value vm_call_native(VM* vm, const char* name, int arg_count, Value* args);  // Using Value instead of VMValue
 
 #ifdef ENABLE_JIT
 void vm_jit_compile(VM* vm);
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif // VM_H
